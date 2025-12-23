@@ -1,0 +1,1677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AURA v7.0 OMEGA Data Manager</title>
+    <style>
+        :root {
+            --bg: #050816;
+            --bg-elevated: #0b1020;
+            --bg-elevated-2: #111827;
+            --accent: #4f46e5;
+            --accent-soft: rgba(79, 70, 229, 0.2);
+            --accent-soft-2: rgba(79, 70, 229, 0.4);
+            --accent-strong: #a855f7;
+            --border-subtle: #1f2937;
+            --border-strong: #374151;
+            --text-main: #e5e7eb;
+            --text-muted: #9ca3af;
+            --text-soft: #6b7280;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.6);
+            --radius-lg: 18px;
+            --radius-md: 12px;
+            --radius-pill: 999px;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: radial-gradient(circle at top left, #111827 0, #020617 45%, #000 100%);
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        body { display: flex; flex-direction: column; overflow: hidden; }
+        .app-shell { display: flex; height: 100vh; }
+
+        .sidebar {
+            width: 280px;
+            background: linear-gradient(180deg, #020617 0%, #050816 45%, #020617 100%);
+            border-right: 1px solid var(--border-subtle);
+            padding: 14px 10px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 6px 10px;
+        }
+
+        .sidebar-title {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .data-type-selector {
+            display: flex;
+            gap: 4px;
+            padding: 4px;
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: var(--radius-pill);
+            border: 1px solid var(--border-subtle);
+            margin-bottom: 8px;
+        }
+
+        .data-type-btn {
+            flex: 1;
+            padding: 6px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: var(--radius-pill);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .data-type-btn.active {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+        }
+
+        .entries-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-height: 0;
+        }
+
+        .entry-item {
+            padding: 8px 10px;
+            border-radius: var(--radius-md);
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border-subtle);
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .entry-item:hover {
+            background: rgba(55, 65, 81, 0.4);
+            border-color: rgba(148, 163, 184, 0.4);
+        }
+
+        .entry-item.active {
+            background: rgba(79, 70, 229, 0.3);
+            border-color: rgba(129, 140, 248, 0.7);
+        }
+
+        .entry-item.shift-item {
+            margin-left: 20px;
+            border-left: 3px solid var(--accent);
+            padding-left: 8px;
+        }
+
+        .entry-item.shift-item::before {
+            content: '↳';
+            position: absolute;
+            left: -15px;
+            color: var(--accent);
+            font-size: 14px;
+        }
+
+        .entry-item-title {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .entry-item-subtitle {
+            font-size: 10px;
+            color: var(--text-soft);
+        }
+
+        .group-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+
+        .sidebar-footer {
+            display: flex;
+            gap: 6px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border-subtle);
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 10;
+            background: linear-gradient(180deg, rgba(2, 6, 23, 0.0), rgba(5, 8, 22, 0.98));
+        }
+
+        .pill-button {
+            border-radius: var(--radius-pill);
+            border: 1px solid var(--border-subtle);
+            background: radial-gradient(circle at top left, rgba(148, 163, 184, 0.45), rgba(15, 23, 42, 0.95));
+            color: #f9fafb;
+            font-size: 12px;
+            padding: 6px 12px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.1);
+            transition: all 0.2s;
+        }
+
+        .pill-button:hover {
+            background: radial-gradient(circle at top left, rgba(168, 183, 204, 0.55), rgba(25, 33, 52, 0.95));
+            border-color: var(--accent-soft-2);
+        }
+
+        .pill-button.small {
+            font-size: 11px;
+            padding: 4px 10px;
+        }
+
+        .pill-button.danger {
+            background: radial-gradient(circle at top left, rgba(239, 68, 68, 0.3), rgba(15, 23, 42, 0.95));
+            border-color: rgba(239, 68, 68, 0.4);
+        }
+
+        .pill-button.danger:hover {
+            background: radial-gradient(circle at top left, rgba(239, 68, 68, 0.5), rgba(25, 33, 52, 0.95));
+        }
+
+        .pill-button.success {
+            background: radial-gradient(circle at top left, rgba(34, 197, 94, 0.3), rgba(15, 23, 42, 0.95));
+            border-color: rgba(34, 197, 94, 0.4);
+        }
+
+        .main-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .main-header {
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(7, 11, 21, 0.98) 100%);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .brand-block {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .brand-title {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            background: linear-gradient(135deg, #e0e7ff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .brand-subtitle {
+            font-size: 11px;
+            color: var(--text-soft);
+        }
+
+        .tab-toggle {
+            display: flex;
+            gap: 4px;
+            padding: 4px;
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: var(--radius-pill);
+            border: 1px solid var(--border-subtle);
+        }
+
+        .tab-button {
+            padding: 6px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: var(--radius-pill);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-button.active {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+        }
+
+        .main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .editor-card {
+            background: rgba(17, 24, 39, 0.8);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            box-shadow: var(--shadow-soft);
+        }
+
+        .form-section {
+            margin-bottom: 24px;
+        }
+
+        .form-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--text-main);
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .form-help {
+            font-size: 11px;
+            color: var(--text-soft);
+            margin-top: 4px;
+        }
+
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            color: var(--text-main);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            border-color: var(--accent-soft-2);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .form-textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .radio-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: var(--radius-pill);
+            border: 1px solid var(--border-subtle);
+            background: rgba(15, 23, 42, 0.9);
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .radio-pill:has(input:checked) {
+            background: var(--accent-soft-2);
+            border-color: var(--accent);
+        }
+
+        .radio-pill input[type="radio"] {
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .emotion-preset-dropdown {
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            color: var(--text-main);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .emotion-preset-dropdown:focus {
+            border-color: var(--accent-soft-2);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .emotion-preset-dropdown option {
+            background: #0b1020;
+            color: var(--text-main);
+            padding: 8px;
+        }
+
+        .switch-sliders {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .slider-control {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .slider-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .slider-value {
+            font-size: 11px;
+            color: var(--accent-strong);
+            font-weight: 600;
+            font-family: ui-monospace, monospace;
+        }
+
+        .slider-input {
+            width: 100%;
+            height: 6px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(15, 23, 42, 0.95);
+            border-radius: 3px;
+            outline: none;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            cursor: pointer;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .slider-input::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            cursor: pointer;
+            border-radius: 50%;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .tag-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--accent-soft-2);
+            border: 1px solid var(--accent);
+            border-radius: var(--radius-pill);
+            font-size: 11px;
+            color: var(--text-main);
+        }
+
+        .tag-remove {
+            cursor: pointer;
+            color: var(--text-muted);
+            transition: color 0.2s;
+        }
+
+        .tag-remove:hover {
+            color: var(--danger);
+        }
+
+        .pair-selector {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .pair-selector select {
+            flex: 1;
+        }
+
+        .tag-list-area {
+            width: 100%;
+            min-height: 60px;
+            padding: 10px 12px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            color: var(--text-main);
+            font-size: 12px;
+            font-family: ui-monospace, monospace;
+            outline: none;
+            resize: vertical;
+        }
+
+        .tag-list-area:focus {
+            border-color: var(--accent-soft-2);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .code-view {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            height: 100%;
+        }
+
+        .code-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .code-title {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .code-textarea {
+            flex: 1;
+            width: 100%;
+            resize: none;
+            font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            border-radius: var(--radius-md);
+            padding: 12px;
+            border: 1px solid var(--border-subtle);
+            background: rgba(15, 23, 42, 0.98);
+            color: var(--text-main);
+            outline: none;
+        }
+
+        .code-textarea:focus {
+            border-color: var(--accent-soft-2);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 12px;
+            color: var(--text-soft);
+            text-align: center;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            opacity: 0.3;
+        }
+
+        .empty-state-text {
+            font-size: 14px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.9);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(75, 85, 99, 0.8);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(156, 163, 175, 0.9);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .breadcrumb {
+            font-size: 11px;
+            color: var(--text-soft);
+            margin-bottom: 12px;
+            padding: 6px 10px;
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: var(--radius-pill);
+            display: inline-block;
+        }
+
+        .breadcrumb strong {
+            color: var(--accent-strong);
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">AURA Data</div>
+            </div>
+            
+            <div class="data-type-selector">
+                <button class="data-type-btn active" onclick="window.switchType('characters', event)">Chars</button>
+                <button class="data-type-btn" onclick="window.switchType('pairs', event)">Pairs</button>
+                <button class="data-type-btn" onclick="window.switchType('dynamiclore', event)">Lore</button>
+            </div>
+
+            <div class="entries-list" id="entriesList"></div>
+
+            <div class="sidebar-footer">
+                <button type="button" class="pill-button small" onclick="window.createNew()">+ New</button>
+                <button type="button" class="pill-button small" onclick="window.duplicate()">Dup</button>
+                <button type="button" class="pill-button danger small" onclick="window.deleteEntry()">Del</button>
+                <button type="button" class="pill-button small" onclick="window.addShift()" id="btnAddShift" style="display:none;">+ Shift</button>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="main-header">
+                <div class="brand-block">
+                    <div class="brand-title">AURA Data Manager</div>
+                </div>
+                <div class="tab-toggle">
+                    <button class="tab-button active" onclick="window.switchTab('visual')">Visual</button>
+                    <button class="tab-button" onclick="window.switchTab('code')">Code</button>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="pill-button small" onclick="window.importData()">Import</button>
+                    <button class="pill-button small success" onclick="window.exportData()">Export</button>
+                </div>
+            </header>
+
+            <div class="main-content">
+                <div id="visualEditor" class="editor-card">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">👈</div>
+                        <div class="empty-state-text">Select an entry from the sidebar<br>or create a new one</div>
+                    </div>
+                </div>
+
+                <div id="codeView" class="code-view hidden">
+                    <div class="code-panel">
+                        <div class="code-header">
+                            <div class="code-title">Current Entry JSON</div>
+                            <button class="pill-button small" onclick="window.syncFromJson()">← Sync</button>
+                        </div>
+                        <textarea class="code-textarea" id="entryJsonCode"></textarea>
+                    </div>
+                    <div class="code-panel">
+                        <div class="code-header">
+                            <div class="code-title">Full Export</div>
+                            <button class="pill-button small" onclick="window.copyCode()">Copy</button>
+                        </div>
+                        <textarea class="code-textarea" id="fullExportCode" readonly></textarea>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <input type="file" id="fileInput" accept=".js,.txt" style="display:none;" onchange="window.handleFileImport(event)">
+
+    <script>
+// ============================================================================
+// AURA v7.0 OMEGA DATA MANAGER
+// ============================================================================
+// CHANGELOG v7.0:
+// - Upgraded to 12 binary heads (S1-S12) for expanded emotional coverage
+// - S1: Joy, S2: Sadness, S3: Anger, S4: Fear, S5: Disgust, S6: Surprise
+// - S7: Lust, S8: Romance, S9: Dominance, S10: Comfort, S11: Regret, S12: Deception
+// - Updated emotion presets to match new head semantics
+// - All other functionality preserved (Characters, Pairs, DynamicLore, Shifts)
+// ============================================================================
+
+var STATE = {
+    type: 'characters',
+    entryId: null,
+    shiftId: null,
+    data: {
+        characters: [],
+        pairs: [],
+        dynamiclore: []
+    }
+};
+
+var EMOTION_PRESETS = {
+    JOY: { label: 'Joy / Happiness', S1: 0.8 },
+    SADNESS: { label: 'Sadness / Grief', S2: 0.8 },
+    FIGHTING: { label: 'Fighting / Combat', S3: 0.7 },
+    FEAR: { label: 'Fear / Terror', S4: 0.8 },
+    DISGUST: { label: 'Disgust / Repulsion', S5: 0.8 },
+    SURPRISE: { label: 'Surprise / Shock', S6: 0.7 },
+    LUST: { label: 'Lust / Sexual Desire', S7: 0.8 },
+    ROMANCE: { label: 'Romance / Love', S8: 0.8 },
+    DOMINANCE: { label: 'Dominance / Power', S9: 0.7 },
+    COMFORT: { label: 'Comfort / Nurturing', S10: 0.8 },
+    REGRET: { label: 'Regret / Guilt', S11: 0.7 },
+    DECEPTION: { label: 'Deception / Lies', S12: 0.7 },
+    TENSION: { label: 'Tension / Suspense (Fear + Anger)', S4: 0.6, S3: 0.5 },
+    HATE_LOVE: { label: 'Love-Hate (Romance + Anger)', S8: 0.6, S3: 0.6 },
+    PASSIONATE: { label: 'Passionate Romance (Romance + Lust)', S8: 0.7, S7: 0.7 }
+};
+
+var SWITCH_LABELS = {
+    S1: 'Joy (Happy/Positive)', 
+    S2: 'Sadness (Sad/Grief)', 
+    S3: 'Anger (Mad/Furious)', 
+    S4: 'Fear (Scared/Terror)',
+    S5: 'Disgust (Gross/Repulsed)', 
+    S6: 'Surprise (Shocked/Amazed)', 
+    S7: 'Lust (Sexual/Horny)', 
+    S8: 'Romance (Love/Affection)',
+    S9: 'Dominance (Dominant/Submissive)',
+    S10: 'Comfort (Safe/Nurturing)',
+    S11: 'Regret (Guilt/Sorry)',
+    S12: 'Deception (Lies/Secrets)'
+};
+
+function id(prefix) {
+    return prefix + '_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+function charKeys() {
+    return STATE.data.characters.map(function(c) { return c.key; });
+}
+
+function curr() {
+    if (!STATE.entryId) return null;
+    var arr = STATE.data[STATE.type];
+    for (var i = 0; i < arr.length; i++) {
+        if (arr[i].id === STATE.entryId) return arr[i];
+    }
+    return null;
+}
+
+function currShift() {
+    if (!STATE.shiftId) return null;
+    var entry = curr();
+    if (!entry || !entry.shifts) return null;
+    for (var i = 0; i < entry.shifts.length; i++) {
+        if (entry.shifts[i].id === STATE.shiftId) return entry.shifts[i];
+    }
+    return null;
+}
+
+function save(data) {
+    var arr = STATE.data[STATE.type];
+    for (var i = 0; i < arr.length; i++) {
+        if (arr[i].id === STATE.entryId) {
+            for (var k in data) arr[i][k] = data[k];
+            renderList();
+            renderCode();
+            return;
+        }
+    }
+}
+
+function saveShift(data) {
+    var entry = curr();
+    if (!entry || !entry.shifts) return;
+    for (var i = 0; i < entry.shifts.length; i++) {
+        if (entry.shifts[i].id === STATE.shiftId) {
+            for (var k in data) entry.shifts[i][k] = data[k];
+            renderList();
+            renderCode();
+            return;
+        }
+    }
+}
+
+// Helper function to find matching bracket
+function findMatchingBracket(str, startPos, openChar, closeChar) {
+    var depth = 1;
+    for (var i = startPos + 1; i < str.length; i++) {
+        if (str[i] === openChar) depth++;
+        else if (str[i] === closeChar) {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+window.switchType = function(type, e) {
+    STATE.type = type;
+    STATE.entryId = null;
+    STATE.shiftId = null;
+    var btns = document.querySelectorAll('.data-type-btn');
+    for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
+    if (e && e.target) e.target.classList.add('active');
+    
+    document.getElementById('btnAddShift').style.display = type === 'dynamiclore' ? 'inline-flex' : 'none';
+    
+    renderList();
+    renderEditor();
+    renderCode();
+};
+
+window.createNew = function() {
+    var newEntry, newId = id(STATE.type);
+    if (STATE.type === 'characters') {
+        newEntry = { id: newId, key: '', gender: 'N', role: '', personality: '' };
+    } else if (STATE.type === 'pairs') {
+        newEntry = { id: newId, pair: ['', ''], emotion: [{}], scenario: '' };
+    } else {
+        newEntry = {
+            id: newId, id_name: '', priority: 2, group: '', scenario: '', personality: '',
+            andAny: [], andAll: [], andNone: [], groupInclude: [], emotion: [{}], characters: [], shifts: []
+        };
+    }
+    STATE.data[STATE.type].push(newEntry);
+    STATE.entryId = newId;
+    STATE.shiftId = null;
+    renderList();
+    renderEditor();
+    renderCode();
+};
+
+window.duplicate = function() {
+    var entry = curr();
+    if (!entry) return;
+    var clone = JSON.parse(JSON.stringify(entry));
+    clone.id = id(STATE.type);
+    if (clone.key) clone.key += '_copy';
+    if (clone.id_name) clone.id_name += '_copy';
+    STATE.data[STATE.type].push(clone);
+    STATE.entryId = clone.id;
+    STATE.shiftId = null;
+    renderList();
+    renderEditor();
+    renderCode();
+};
+
+window.deleteEntry = function() {
+    console.log('=== DELETE CLICKED ===');
+    console.log('shiftId:', STATE.shiftId);
+    console.log('entryId:', STATE.entryId);
+    console.log('Current type:', STATE.type);
+    console.log('Array length:', STATE.data[STATE.type].length);
+    
+    if (STATE.shiftId) {
+        console.log('Attempting to delete shift...');
+        var entry = curr();
+        if (!entry || !entry.shifts) {
+            console.log('No entry or shifts found');
+            return;
+        }
+        for (var i = 0; i < entry.shifts.length; i++) {
+            if (entry.shifts[i].id === STATE.shiftId) {
+                console.log('Deleting shift at index', i);
+                entry.shifts.splice(i, 1);
+                STATE.shiftId = null;
+                console.log('Shift deleted, re-rendering...');
+                renderList();
+                renderEditor();
+                renderCode();
+                console.log('=== DELETE COMPLETE ===');
+                return;
+            }
+        }
+        console.log('Shift not found in array');
+        return;
+    }
+    
+    if (!STATE.entryId) {
+        console.log('No entry selected');
+        alert('No entry selected');
+        return;
+    }
+    
+    console.log('Attempting to delete entry...');
+    
+    var arr = STATE.data[STATE.type];
+    console.log('Searching in array of', arr.length, 'items');
+    
+    for (var i = 0; i < arr.length; i++) {
+        console.log('Checking item', i, '- id:', arr[i].id);
+        if (arr[i].id === STATE.entryId) {
+            console.log('FOUND! Deleting entry at index', i);
+            arr.splice(i, 1);
+            console.log('Array length after splice:', arr.length);
+            STATE.entryId = null;
+            STATE.shiftId = null;
+            console.log('Calling renderList...');
+            renderList();
+            console.log('Calling renderEditor...');
+            renderEditor();
+            console.log('Calling renderCode...');
+            renderCode();
+            console.log('=== DELETE COMPLETE ===');
+            return;
+        }
+    }
+    console.log('Entry not found in array!');
+};
+
+window.addShift = function() {
+    if (STATE.type !== 'dynamiclore') return;
+    var entry = curr();
+    if (!entry) {
+        alert('Please select a lore entry first');
+        return;
+    }
+    if (!entry.shifts) entry.shifts = [];
+    var shift = {
+        id: id('shift'),
+        scenario: '',
+        personality: '',
+        andAny: [],
+        andAll: [],
+        andNone: [],
+        emotion: [{}],
+        characters: [],
+        priority: null
+    };
+    entry.shifts.push(shift);
+    STATE.shiftId = shift.id;
+    renderList();
+    renderEditor();
+    renderCode();
+};
+
+window.selectEntry = function(entryId, shiftId) {
+    STATE.entryId = entryId;
+    STATE.shiftId = shiftId || null;
+    renderList();
+    renderEditor();
+    renderCode();
+};
+
+window.switchTab = function(tab) {
+    var vis = document.getElementById('visualEditor');
+    var code = document.getElementById('codeView');
+    var btns = document.querySelectorAll('.tab-button');
+    if (tab === 'visual') {
+        vis.classList.remove('hidden');
+        code.classList.add('hidden');
+        btns[0].classList.add('active');
+        btns[1].classList.remove('active');
+    } else {
+        vis.classList.add('hidden');
+        code.classList.remove('hidden');
+        btns[0].classList.remove('active');
+        btns[1].classList.add('active');
+        renderCode();
+    }
+};
+
+window.exportData = function() {
+    var txt = genExport();
+    var blob = new Blob([txt], { type: 'text/javascript' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'aura_export.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+};
+
+window.importData = function() {
+    document.getElementById('fileInput').click();
+};
+
+window.handleFileImport = function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+        try {
+            parseImport(ev.target.result);
+            alert('Import successful!');
+            renderList();
+            renderEditor();
+            renderCode();
+        } catch (err) {
+            alert('Import error: ' + err.message);
+            console.error('Import error:', err);
+        }
+    };
+    reader.readAsText(file);
+};
+
+window.syncFromJson = function() {
+    try {
+        var json = JSON.parse(document.getElementById('entryJsonCode').value);
+        save(json);
+        renderEditor();
+        alert('Synced!');
+    } catch (e) {
+        alert('Invalid JSON: ' + e.message);
+    }
+};
+
+window.copyCode = function() {
+    var code = document.getElementById('fullExportCode');
+    code.select();
+    document.execCommand('copy');
+    alert('Copied!');
+};
+
+function getGroupColor(group) {
+    if (!group) return '';
+    var hash = 0;
+    for (var i = 0; i < group.length; i++) {
+        hash = group.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    var hue = Math.abs(hash % 360);
+    return 'hsl(' + hue + ', 70%, 60%)';
+}
+
+function renderList() {
+    var list = document.getElementById('entriesList');
+    var arr = STATE.data[STATE.type];
+    if (arr.length === 0) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📝</div><div class="empty-state-text">No entries</div></div>';
+        return;
+    }
+    var html = '';
+    for (var i = 0; i < arr.length; i++) {
+        var e = arr[i];
+        var title, sub;
+        if (STATE.type === 'characters') {
+            title = e.key || 'Unnamed';
+            sub = (e.gender || '?') + ' · ' + (e.role || 'No role');
+        } else if (STATE.type === 'pairs') {
+            title = e.pair ? e.pair.join(' & ') : 'Unnamed';
+            sub = (e.emotion ? e.emotion.length : 0) + ' emotion(s)';
+        } else {
+            title = e.id_name || 'Unnamed';
+            var groupIndicator = '';
+            if (e.group) {
+                var color = getGroupColor(e.group);
+                groupIndicator = '<span class="group-indicator" style="background-color:' + color + ';"></span>';
+            }
+            sub = groupIndicator + 'Priority ' + (e.priority || 0) + (e.group ? ' · Group: ' + e.group : '');
+        }
+        var active = e.id === STATE.entryId && !STATE.shiftId ? 'active' : '';
+        html += '<div class="entry-item ' + active + '" onclick="window.selectEntry(\'' + e.id + '\')">';
+        html += '<div class="entry-item-title">' + title + '</div>';
+        html += '<div class="entry-item-subtitle">' + sub + '</div>';
+        html += '</div>';
+        
+        if (STATE.type === 'dynamiclore' && e.shifts && e.shifts.length > 0) {
+            for (var j = 0; j < e.shifts.length; j++) {
+                var s = e.shifts[j];
+                var sActive = e.id === STATE.entryId && s.id === STATE.shiftId ? 'active' : '';
+                html += '<div class="entry-item shift-item ' + sActive + '" onclick="window.selectEntry(\'' + e.id + '\', \'' + s.id + '\')">';
+                html += '<div class="entry-item-title">Shift: ' + (s.id || 'Unnamed') + '</div>';
+                html += '<div class="entry-item-subtitle">Priority: ' + (s.priority != null ? s.priority : 'inherit') + '</div>';
+                html += '</div>';
+            }
+        }
+    }
+    list.innerHTML = html;
+}
+
+function renderEditor() {
+    var ed = document.getElementById('visualEditor');
+    var entry = curr();
+    if (!entry) {
+        ed.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👈</div><div class="empty-state-text">Select an entry</div></div>';
+        return;
+    }
+    
+    if (STATE.shiftId) {
+        renderShiftEditor(entry, currShift());
+        return;
+    }
+    
+    if (STATE.type === 'characters') renderCharEditor(entry);
+    else if (STATE.type === 'pairs') renderPairEditor(entry);
+    else renderLoreEditor(entry);
+}
+
+function renderCharEditor(e) {
+    var ed = document.getElementById('visualEditor');
+    ed.innerHTML = '<div class="form-section"><div class="section-title">Character</div><div class="form-group"><label class="form-label">Key</label><input class="form-input" value="' + (e.key || '') + '" oninput="save({key:this.value.toLowerCase()})"><div class="form-help">Lowercase identifier</div></div><div class="form-grid"><div class="form-group"><label class="form-label">Gender</label><div class="radio-group"><label class="radio-pill"><input type="radio" name="gender" value="M" ' + (e.gender === 'M' ? 'checked' : '') + ' onchange="save({gender:\'M\'})"><span>Male</span></label><label class="radio-pill"><input type="radio" name="gender" value="F" ' + (e.gender === 'F' ? 'checked' : '') + ' onchange="save({gender:\'F\'})"><span>Female</span></label><label class="radio-pill"><input type="radio" name="gender" value="N" ' + (e.gender === 'N' ? 'checked' : '') + ' onchange="save({gender:\'N\'})"><span>Neutral</span></label></div></div><div class="form-group"><label class="form-label">Role</label><input class="form-input" value="' + (e.role || '') + '" oninput="save({role:this.value})"></div></div><div class="form-group"><label class="form-label">Personality (context.character.personality)</label><textarea class="form-textarea" style="min-height:100px;" oninput="save({personality:this.value})">' + (e.personality || '') + '</textarea><div class="form-help">Optional personality description for character context</div></div></div>';
+}
+
+function renderPairEditor(e) {
+    var ed = document.getElementById('visualEditor');
+    var chars = charKeys();
+    var pair = e.pair || ['', ''];
+    var emo = e.emotion || [{}];
+    
+    var c1opts = '<option value="">Select</option>';
+    var c2opts = '<option value="">Select</option>';
+    for (var i = 0; i < chars.length; i++) {
+        c1opts += '<option value="' + chars[i] + '" ' + (pair[0] === chars[i] ? 'selected' : '') + '>' + chars[i] + '</option>';
+        c2opts += '<option value="' + chars[i] + '" ' + (pair[1] === chars[i] ? 'selected' : '') + '>' + chars[i] + '</option>';
+    }
+    
+    // Detect current preset
+    var currentPreset = '';
+    if (emo[0]) {
+        for (var pk in EMOTION_PRESETS) {
+            var preset = EMOTION_PRESETS[pk];
+            var matches = true;
+            var presetKeys = Object.keys(preset).filter(function(k) { return k !== 'label'; });
+            var emoKeys = Object.keys(emo[0]);
+            
+            if (presetKeys.length !== emoKeys.length) continue;
+            
+            for (var i = 0; i < presetKeys.length; i++) {
+                var key = presetKeys[i];
+                if (!emo[0][key] || Math.abs(emo[0][key] - preset[key]) > 0.01) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                currentPreset = pk;
+                break;
+            }
+        }
+    }
+    
+    var presetOptions = '<option value="">-- Select Emotion Preset --</option>';
+    var pk = Object.keys(EMOTION_PRESETS);
+    for (var i = 0; i < pk.length; i++) {
+        var selected = pk[i] === currentPreset ? ' selected' : '';
+        presetOptions += '<option value="' + pk[i] + '"' + selected + '>' + EMOTION_PRESETS[pk[i]].label + '</option>';
+    }
+    
+    var sliders = '';
+    var sk = Object.keys(SWITCH_LABELS);
+    for (var i = 0; i < sk.length; i++) {
+        var sw = sk[i];
+        var val = emo[0] && emo[0][sw] ? emo[0][sw] : 0;
+        sliders += '<div class="slider-control"><div class="slider-header"><span class="slider-label">' + SWITCH_LABELS[sw] + '</span><span class="slider-value" id="val_' + sw + '">' + val.toFixed(2) + '</span></div><input type="range" class="slider-input" min="0" max="1" step="0.01" value="' + val + '" oninput="updateSwitch(\'' + sw + '\', this.value)"></div>';
+    }
+    
+    ed.innerHTML = '<div class="form-section"><div class="section-title">Pair</div><div class="form-group"><div class="pair-selector"><select class="form-select" onchange="savePair1(this.value)">' + c1opts + '</select><span>+</span><select class="form-select" onchange="savePair2(this.value)">' + c2opts + '</select></div></div></div><div class="form-section"><div class="section-title">Emotion Presets</div><div class="form-group"><select class="emotion-preset-dropdown" onchange="applyPreset(this.value)">' + presetOptions + '</select><div class="form-help">Select a preset to quickly configure neural switches</div></div><div class="form-group" style="margin-top:20px;"><label class="form-label">Neural Switches (Manual Adjustment)</label><div class="switch-sliders">' + sliders + '</div></div></div><div class="form-section"><div class="section-title">Scenario</div><textarea class="form-textarea" style="min-height:120px;" oninput="save({scenario:this.value})">' + (e.scenario || '') + '</textarea></div>';
+}
+
+function renderLoreEditor(e) {
+    var ed = document.getElementById('visualEditor');
+    
+    var andAnyText = (e.andAny || []).join(', ');
+    var andAllText = (e.andAll || []).join(', ');
+    var andNoneText = (e.andNone || []).join(', ');
+    
+    var giHtml = '';
+    var gi = e.groupInclude || [];
+    for (var i = 0; i < gi.length; i++) {
+        giHtml += '<span class="tag">' + gi[i] + '<span class="tag-remove" onclick="removeGi(\'' + gi[i] + '\')">✕</span></span>';
+    }
+    
+    // Character checkboxes
+    var chars = charKeys();
+    var selectedChars = e.characters || [];
+    var charCheckboxes = '';
+    if (chars.length > 0) {
+        for (var i = 0; i < chars.length; i++) {
+            var checked = selectedChars.indexOf(chars[i]) >= 0 ? 'checked' : '';
+            charCheckboxes += '<label class="radio-pill"><input type="checkbox" value="' + chars[i] + '" ' + checked + ' onchange="toggleLoreChar(\'' + chars[i] + '\')"><span>' + chars[i] + '</span></label>';
+        }
+    } else {
+        charCheckboxes = '<div class="form-help">No characters defined yet. Create characters first.</div>';
+    }
+    
+    // Detect current preset
+    var emo = e.emotion || [{}];
+    var currentPreset = '';
+    if (emo[0]) {
+        for (var pk in EMOTION_PRESETS) {
+            var preset = EMOTION_PRESETS[pk];
+            var matches = true;
+            var presetKeys = Object.keys(preset).filter(function(k) { return k !== 'label'; });
+            var emoKeys = Object.keys(emo[0]);
+            
+            if (presetKeys.length !== emoKeys.length) continue;
+            
+            for (var i = 0; i < presetKeys.length; i++) {
+                var key = presetKeys[i];
+                if (!emo[0][key] || Math.abs(emo[0][key] - preset[key]) > 0.01) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                currentPreset = pk;
+                break;
+            }
+        }
+    }
+    
+    var presetOptions = '<option value="">-- Select Emotion Preset --</option>';
+    var pk = Object.keys(EMOTION_PRESETS);
+    for (var i = 0; i < pk.length; i++) {
+        var selected = pk[i] === currentPreset ? ' selected' : '';
+        presetOptions += '<option value="' + pk[i] + '"' + selected + '>' + EMOTION_PRESETS[pk[i]].label + '</option>';
+    }
+    
+    var sliders = '';
+    var sk = Object.keys(SWITCH_LABELS);
+    for (var i = 0; i < sk.length; i++) {
+        var sw = sk[i];
+        var val = emo[0] && emo[0][sw] ? emo[0][sw] : 0;
+        sliders += '<div class="slider-control"><div class="slider-header"><span class="slider-label">' + SWITCH_LABELS[sw] + '</span><span class="slider-value" id="val_lore_' + sw + '">' + val.toFixed(2) + '</span></div><input type="range" class="slider-input" min="0" max="1" step="0.01" value="' + val + '" oninput="updateLoreSwitch(\'' + sw + '\', this.value)"></div>';
+    }
+    
+    ed.innerHTML = '<div class="form-section"><div class="section-title">Lore Entry</div><div class="form-grid"><div class="form-group"><label class="form-label">ID Name</label><input class="form-input" value="' + (e.id_name || '') + '" oninput="save({id_name:this.value})"></div><div class="form-group"><label class="form-label">Priority</label><input type="number" class="form-input" value="' + (e.priority || 0) + '" oninput="save({priority:parseInt(this.value)||0})"></div><div class="form-group"><label class="form-label">Group</label><input class="form-input" value="' + (e.group || '') + '" oninput="save({group:this.value})"></div></div></div><div class="form-section"><div class="section-title">Characters (Keywords)</div><div class="form-group"><div class="radio-group">' + charCheckboxes + '</div><div class="form-help">Select characters that trigger this lore entry</div></div></div><div class="form-section"><div class="section-title">Emotion Presets</div><div class="form-group"><select class="emotion-preset-dropdown" onchange="applyLorePreset(this.value)">' + presetOptions + '</select><div class="form-help">Select a preset to quickly configure neural switches</div></div><div class="form-group" style="margin-top:20px;"><label class="form-label">Neural Switches (Manual Adjustment)</label><div class="switch-sliders">' + sliders + '</div></div></div><div class="form-section"><div class="section-title">Trigger Conditions</div><div class="form-group"><label class="form-label">andAny (Require ANY of these)</label><textarea class="tag-list-area" oninput="updateTagList(\'andAny\',this.value)">' + andAnyText + '</textarea><div class="form-help">Comma-separated: affect.positive, scene.romance</div></div><div class="form-group"><label class="form-label">andAll (Require ALL of these)</label><textarea class="tag-list-area" oninput="updateTagList(\'andAll\',this.value)">' + andAllText + '</textarea><div class="form-help">Entry triggers only if ALL tags are present</div></div><div class="form-group"><label class="form-label">andNone (Exclude if ANY present)</label><textarea class="tag-list-area" oninput="updateTagList(\'andNone\',this.value)">' + andNoneText + '</textarea><div class="form-help">Entry will NOT trigger if any of these are present</div></div></div><div class="form-section"><div class="section-title">Inclusion Groups</div><div style="display:flex;gap:8px;margin-bottom:8px;"><input class="form-input" id="giInput" placeholder="group id..." onkeypress="if(event.key===\'Enter\'){event.preventDefault();addGi();}"><button class="pill-button small" onclick="addGi()">Add</button></div><div class="tag-cloud">' + giHtml + '</div><div class="form-help">Selective activation by group ID</div></div><div class="form-section"><div class="section-title">Personality Text (context.character.personality)</div><textarea class="form-textarea" style="min-height:100px;" oninput="save({personality:this.value})">' + (e.personality || '') + '</textarea><div class="form-help">Optional personality description for lore context</div></div><div class="form-section"><div class="section-title">Scenario Text</div><textarea class="form-textarea" style="min-height:120px;" oninput="save({scenario:this.value})">' + (e.scenario || '') + '</textarea></div>';
+    
+    if (e.shifts && e.shifts.length > 0) {
+        var shiftsHtml = '<div class="form-section"><div class="section-title">Shifts (' + e.shifts.length + ')</div>';
+        for (var i = 0; i < e.shifts.length; i++) {
+            var s = e.shifts[i];
+            shiftsHtml += '<div style="padding:8px;margin-bottom:6px;background:rgba(15,23,42,0.8);border:1px solid var(--border-subtle);border-left:3px solid var(--accent);border-radius:var(--radius-md);cursor:pointer;" onclick="window.selectEntry(\'' + e.id + '\', \'' + s.id + '\')"><div style="font-size:12px;font-weight:600;">' + (s.id || 'Shift ' + (i + 1)) + '</div><div style="font-size:10px;color:var(--text-soft);">Priority: ' + (s.priority != null ? s.priority : 'inherit') + '</div></div>';
+        }
+        shiftsHtml += '</div>';
+        ed.innerHTML += shiftsHtml;
+    }
+}
+
+function renderShiftEditor(entry, shift) {
+    if (!shift) return;
+    var ed = document.getElementById('visualEditor');
+    
+    var bc = '<div class="breadcrumb">Editing Shift of <strong>' + (entry.id_name || entry.id) + '</strong></div>';
+    
+    var andAnyText = (shift.andAny || []).join(', ');
+    var andAllText = (shift.andAll || []).join(', ');
+    var andNoneText = (shift.andNone || []).join(', ');
+    
+    // Character checkboxes
+    var chars = charKeys();
+    var selectedChars = shift.characters || [];
+    var charCheckboxes = '';
+    if (chars.length > 0) {
+        for (var i = 0; i < chars.length; i++) {
+            var checked = selectedChars.indexOf(chars[i]) >= 0 ? 'checked' : '';
+            charCheckboxes += '<label class="radio-pill"><input type="checkbox" value="' + chars[i] + '" ' + checked + ' onchange="toggleShiftChar(\'' + chars[i] + '\')"><span>' + chars[i] + '</span></label>';
+        }
+    } else {
+        charCheckboxes = '<div class="form-help">No characters defined yet. Create characters first.</div>';
+    }
+    
+    // Detect current preset
+    var emo = shift.emotion || [{}];
+    var currentPreset = '';
+    if (emo[0]) {
+        for (var pk in EMOTION_PRESETS) {
+            var preset = EMOTION_PRESETS[pk];
+            var matches = true;
+            var presetKeys = Object.keys(preset).filter(function(k) { return k !== 'label'; });
+            var emoKeys = Object.keys(emo[0]);
+            
+            if (presetKeys.length !== emoKeys.length) continue;
+            
+            for (var i = 0; i < presetKeys.length; i++) {
+                var key = presetKeys[i];
+                if (!emo[0][key] || Math.abs(emo[0][key] - preset[key]) > 0.01) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                currentPreset = pk;
+                break;
+            }
+        }
+    }
+    
+    var presetOptions = '<option value="">-- Select Emotion Preset --</option>';
+    var pk = Object.keys(EMOTION_PRESETS);
+    for (var i = 0; i < pk.length; i++) {
+        var selected = pk[i] === currentPreset ? ' selected' : '';
+        presetOptions += '<option value="' + pk[i] + '"' + selected + '>' + EMOTION_PRESETS[pk[i]].label + '</option>';
+    }
+    
+    var sliders = '';
+    var sk = Object.keys(SWITCH_LABELS);
+    for (var i = 0; i < sk.length; i++) {
+        var sw = sk[i];
+        var val = emo[0] && emo[0][sw] ? emo[0][sw] : 0;
+        sliders += '<div class="slider-control"><div class="slider-header"><span class="slider-label">' + SWITCH_LABELS[sw] + '</span><span class="slider-value" id="val_shift_' + sw + '">' + val.toFixed(2) + '</span></div><input type="range" class="slider-input" min="0" max="1" step="0.01" value="' + val + '" oninput="updateShiftSwitch(\'' + sw + '\', this.value)"></div>';
+    }
+    
+    ed.innerHTML = bc + '<div class="form-section"><div class="section-title">Shift Configuration</div><div class="form-grid"><div class="form-group"><label class="form-label">Shift ID</label><input class="form-input" value="' + (shift.id || '') + '" oninput="saveShift({id:this.value})"></div><div class="form-group"><label class="form-label">Priority</label><input type="number" class="form-input" value="' + (shift.priority != null ? shift.priority : '') + '" oninput="saveShift({priority:this.value?parseInt(this.value):null})"><div class="form-help">Leave blank to inherit</div></div></div></div><div class="form-section"><div class="section-title">Characters (Keywords)</div><div class="form-group"><div class="radio-group">' + charCheckboxes + '</div><div class="form-help">Select characters that trigger this shift</div></div></div><div class="form-section"><div class="section-title">Emotion Presets</div><div class="form-group"><select class="emotion-preset-dropdown" onchange="applyShiftPreset(this.value)">' + presetOptions + '</select><div class="form-help">Select a preset to quickly configure neural switches</div></div><div class="form-group" style="margin-top:20px;"><label class="form-label">Neural Switches (Manual Adjustment)</label><div class="switch-sliders">' + sliders + '</div></div></div><div class="form-section"><div class="section-title">Trigger Conditions</div><div class="form-group"><label class="form-label">andAny</label><textarea class="tag-list-area" oninput="updateShiftTagList(\'andAny\',this.value)">' + andAnyText + '</textarea></div><div class="form-group"><label class="form-label">andAll</label><textarea class="tag-list-area" oninput="updateShiftTagList(\'andAll\',this.value)">' + andAllText + '</textarea></div><div class="form-group"><label class="form-label">andNone</label><textarea class="tag-list-area" oninput="updateShiftTagList(\'andNone\',this.value)">' + andNoneText + '</textarea></div></div><div class="form-section"><div class="section-title">Shift Personality (context.character.personality)</div><textarea class="form-textarea" style="min-height:100px;" oninput="saveShift({personality:this.value})">' + (shift.personality || '') + '</textarea><div class="form-help">Optional personality override for this shift</div></div><div class="form-section"><div class="section-title">Shift Scenario</div><textarea class="form-textarea" style="min-height:120px;" oninput="saveShift({scenario:this.value})">' + (shift.scenario || '') + '</textarea></div><div style="margin-top:20px;"><button class="pill-button small" onclick="STATE.shiftId=null;renderEditor();">← Back to Entry</button></div>';
+}
+
+function updateTagList(field, value) {
+    var tags = value.split(',').map(function(t) { return t.trim(); }).filter(Boolean);
+    var update = {};
+    update[field] = tags;
+    save(update);
+}
+
+function updateShiftTagList(field, value) {
+    var tags = value.split(',').map(function(t) { return t.trim(); }).filter(Boolean);
+    var update = {};
+    update[field] = tags;
+    saveShift(update);
+}
+
+function addGi() {
+    var inp = document.getElementById('giInput');
+    var gi = inp.value.trim();
+    var entry = curr();
+    if (!gi || !entry) return;
+    var gis = entry.groupInclude || [];
+    if (gis.indexOf(gi) < 0) {
+        gis.push(gi);
+        save({ groupInclude: gis });
+        inp.value = '';
+        renderEditor();
+    }
+}
+
+function removeGi(gi) {
+    var entry = curr();
+    if (!entry) return;
+    var gis = (entry.groupInclude || []).filter(function(g) { return g !== gi; });
+    save({ groupInclude: gis });
+    renderEditor();
+}
+
+function savePair1(v) {
+    var e = curr();
+    var p = [v, e.pair && e.pair[1] ? e.pair[1] : ''];
+    save({ pair: p });
+}
+
+function savePair2(v) {
+    var e = curr();
+    var p = [e.pair && e.pair[0] ? e.pair[0] : '', v];
+    save({ pair: p });
+}
+
+function applyPreset(k) {
+    if (!k) return;
+    var preset = EMOTION_PRESETS[k];
+    var clean = {};
+    for (var key in preset) {
+        if (key !== 'label') {
+            clean[key] = preset[key];
+        }
+    }
+    save({ emotion: [clean] });
+    renderEditor();
+}
+
+function applyLorePreset(k) {
+    if (!k) return;
+    var preset = EMOTION_PRESETS[k];
+    var clean = {};
+    for (var key in preset) {
+        if (key !== 'label') {
+            clean[key] = preset[key];
+        }
+    }
+    save({ emotion: [clean] });
+    renderEditor();
+}
+
+function applyShiftPreset(k) {
+    if (!k) return;
+    var preset = EMOTION_PRESETS[k];
+    var clean = {};
+    for (var key in preset) {
+        if (key !== 'label') {
+            clean[key] = preset[key];
+        }
+    }
+    saveShift({ emotion: [clean] });
+    renderEditor();
+}
+
+function updateLoreSwitch(sw, val) {
+    var e = curr();
+    var emo = e.emotion && e.emotion[0] ? JSON.parse(JSON.stringify(e.emotion[0])) : {};
+    val = parseFloat(val);
+    if (val === 0) delete emo[sw];
+    else emo[sw] = val;
+    save({ emotion: [emo] });
+    document.getElementById('val_lore_' + sw).textContent = val.toFixed(2);
+}
+
+function updateShiftSwitch(sw, val) {
+    var shift = currShift();
+    if (!shift) return;
+    var emo = shift.emotion && shift.emotion[0] ? JSON.parse(JSON.stringify(shift.emotion[0])) : {};
+    val = parseFloat(val);
+    if (val === 0) delete emo[sw];
+    else emo[sw] = val;
+    saveShift({ emotion: [emo] });
+    document.getElementById('val_shift_' + sw).textContent = val.toFixed(2);
+}
+
+function toggleLoreChar(char) {
+    var entry = curr();
+    if (!entry) return;
+    var chars = entry.characters || [];
+    var idx = chars.indexOf(char);
+    if (idx >= 0) {
+        chars.splice(idx, 1);
+    } else {
+        chars.push(char);
+    }
+    save({ characters: chars });
+}
+
+function toggleShiftChar(char) {
+    var shift = currShift();
+    if (!shift) return;
+    var chars = shift.characters || [];
+    var idx = chars.indexOf(char);
+    if (idx >= 0) {
+        chars.splice(idx, 1);
+    } else {
+        chars.push(char);
+    }
+    saveShift({ characters: chars });
+}
+
+function updateSwitch(sw, val) {
+    var e = curr();
+    var emo = e.emotion && e.emotion[0] ? JSON.parse(JSON.stringify(e.emotion[0])) : {};
+    val = parseFloat(val);
+    if (val === 0) delete emo[sw];
+    else emo[sw] = val;
+    save({ emotion: [emo] });
+    document.getElementById('val_' + sw).textContent = val.toFixed(2);
+}
+
+function renderCode() {
+    var eJson = document.getElementById('entryJsonCode');
+    var full = document.getElementById('fullExportCode');
+    var entry = curr();
+    if (entry) {
+        var clean = JSON.parse(JSON.stringify(entry));
+        delete clean.id;
+        eJson.value = JSON.stringify(clean, null, 2);
+    } else {
+        eJson.value = '';
+    }
+    full.value = genExport();
+}
+
+function genExport() {
+    var out = [];
+    
+    if (STATE.data.characters.length > 0) {
+        out.push('// CHARACTERS');
+        out.push('const CHARACTERS = {');
+        for (var i = 0; i < STATE.data.characters.length; i++) {
+            var c = STATE.data.characters[i];
+            var obj = { gender: c.gender, role: c.role };
+            if (c.personality) obj.personality = c.personality;
+            var comma = i < STATE.data.characters.length - 1 ? ',' : '';
+            out.push('    "' + c.key + '": ' + JSON.stringify(obj) + comma);
+        }
+        out.push('};');
+        out.push('');
+    }
+    
+    if (STATE.data.pairs.length > 0) {
+        out.push('// STORY_SCENARIOS');
+        out.push('const STORY_SCENARIOS = [');
+        for (var i = 0; i < STATE.data.pairs.length; i++) {
+            var p = STATE.data.pairs[i];
+            var clean = JSON.parse(JSON.stringify(p));
+            delete clean.id;
+            var comma = i < STATE.data.pairs.length - 1 ? ',' : '';
+            out.push('    ' + JSON.stringify(clean, null, 4).split('\n').join('\n    ') + comma);
+        }
+        out.push('];');
+        out.push('');
+    }
+    
+    if (STATE.data.dynamiclore.length > 0) {
+        out.push('// DYNAMIC_LORE');
+        out.push('const DYNAMIC_LORE = [');
+        for (var i = 0; i < STATE.data.dynamiclore.length; i++) {
+            var l = STATE.data.dynamiclore[i];
+            var clean = JSON.parse(JSON.stringify(l));
+            delete clean.id;
+            if (clean.id_name) {
+                clean.id = clean.id_name;
+                delete clean.id_name;
+            }
+            if (clean.shifts && clean.shifts.length > 0) {
+                clean.Shifts = clean.shifts;
+                delete clean.shifts;
+            }
+            var comma = i < STATE.data.dynamiclore.length - 1 ? ',' : '';
+            out.push('    ' + JSON.stringify(clean, null, 4).split('\n').join('\n    ') + comma);
+        }
+        out.push('];');
+    }
+    
+    return out.join('\n');
+}
+
+function parseImport(txt) {
+    console.log('=== IMPORT START ===');
+    console.log('File size:', txt.length, 'chars');
+    
+    // Extract CHARACTERS using bracket matching
+    var charIdx = txt.indexOf('const CHARACTERS = {');
+    if (charIdx >= 0) {
+        var charStart = txt.indexOf('{', charIdx);
+        var charEnd = findMatchingBracket(txt, charStart, '{', '}');
+        if (charEnd >= 0) {
+            try {
+                var charBlock = txt.substring(charStart, charEnd + 1);
+                var CHARACTERS = eval('(' + charBlock + ')');
+                STATE.data.characters = [];
+                for (var k in CHARACTERS) {
+                    STATE.data.characters.push({
+                        id: id('char'),
+                        key: k,
+                        gender: CHARACTERS[k].gender,
+                        role: CHARACTERS[k].role,
+                        personality: CHARACTERS[k].personality || ''
+                    });
+                }
+                console.log('✓ Imported', STATE.data.characters.length, 'characters');
+            } catch (e) {
+                console.error('Character parse error:', e);
+            }
+        }
+    }
+    
+    // Extract STORY_SCENARIOS
+    var pairIdx = txt.indexOf('const STORY_SCENARIOS = [');
+    if (pairIdx >= 0) {
+        var pairStart = txt.indexOf('[', pairIdx);
+        var pairEnd = findMatchingBracket(txt, pairStart, '[', ']');
+        if (pairEnd >= 0) {
+            try {
+                var pairBlock = txt.substring(pairStart, pairEnd + 1);
+                // Replace EMOTION references with actual objects (without label)
+                pairBlock = pairBlock.replace(/EMOTION\.(FIGHTING|TENSION|DOMINANCE|ROMANCE|LUST|HATE_LOVE|COMFORT)/g, function(match, preset) {
+                    var p = EMOTION_PRESETS[preset];
+                    var clean = {};
+                    for (var k in p) {
+                        if (k !== 'label') clean[k] = p[k];
+                    }
+                    return JSON.stringify(clean);
+                });
+                var STORY_SCENARIOS = eval(pairBlock);
+                STATE.data.pairs = [];
+                for (var i = 0; i < STORY_SCENARIOS.length; i++) {
+                    STATE.data.pairs.push({
+                        id: id('pair'),
+                        pair: STORY_SCENARIOS[i].pair,
+                        emotion: STORY_SCENARIOS[i].emotion,
+                        scenario: STORY_SCENARIOS[i].scenario || STORY_SCENARIOS[i].injection || ''
+                    });
+                }
+                console.log('✓ Imported', STATE.data.pairs.length, 'pairs');
+            } catch (e) {
+                console.error('Pair parse error:', e);
+            }
+        }
+    }
+    
+    // Extract DYNAMIC_LORE
+    var loreIdx = txt.indexOf('const DYNAMIC_LORE = [');
+    if (loreIdx >= 0) {
+        var loreStart = txt.indexOf('[', loreIdx);
+        var loreEnd = findMatchingBracket(txt, loreStart, '[', ']');
+        if (loreEnd >= 0) {
+            try {
+                var loreBlock = txt.substring(loreStart, loreEnd + 1);
+                var DYNAMIC_LORE = eval(loreBlock);
+                STATE.data.dynamiclore = [];
+                for (var i = 0; i < DYNAMIC_LORE.length; i++) {
+                    var entry = DYNAMIC_LORE[i];
+                    var newEntry = {
+                        id: id('lore'),
+                        id_name: entry.id || '',
+                        priority: entry.priority || 0,
+                        group: entry.group || '',
+                        scenario: entry.scenario || '',
+                        personality: entry.personality || '',
+                        andAny: entry.andAny || entry.requireAny || [],
+                        andAll: entry.andAll || entry.requireAll || [],
+                        andNone: entry.andNone || entry.ifNot || entry.notTags || [],
+                        groupInclude: entry.groupInclude || [],
+                        emotion: entry.emotion || [{}],
+                        characters: entry.characters || [],
+                        shifts: []
+                    };
+                    
+                    if (entry.Shifts && Array.isArray(entry.Shifts)) {
+                        for (var j = 0; j < entry.Shifts.length; j++) {
+                            var shift = entry.Shifts[j];
+                            newEntry.shifts.push({
+                                id: shift.id || id('shift'),
+                                scenario: shift.scenario || shift.text || '',
+                                personality: shift.personality || '',
+                                andAny: shift.andAny || shift.andAnyTags || [],
+                                andAll: shift.andAll || shift.andAllTags || [],
+                                andNone: shift.andNone || shift.notTags || shift.andNotTags || [],
+                                emotion: shift.emotion || [{}],
+                                characters: shift.characters || [],
+                                priority: shift.priority
+                            });
+                        }
+                    }
+                    
+                    STATE.data.dynamiclore.push(newEntry);
+                }
+                console.log('✓ Imported', STATE.data.dynamiclore.length, 'lore entries');
+            } catch (e) {
+                console.error('Lore parse error:', e);
+            }
+        }
+    }
+    
+    console.log('=== IMPORT COMPLETE ===');
+    var totalShifts = STATE.data.dynamiclore.reduce(function(sum, e) { return sum + (e.shifts ? e.shifts.length : 0); }, 0);
+    console.log('Total:', STATE.data.characters.length, 'chars,', STATE.data.pairs.length, 'pairs,', STATE.data.dynamiclore.length, 'lore,', totalShifts, 'shifts');
+}
+
+window.onload = function() {
+    console.log('AURA Data Manager loaded');
+    renderList();
+    renderEditor();
+    renderCode();
+};
+    </script>
+</body>
+</html>
