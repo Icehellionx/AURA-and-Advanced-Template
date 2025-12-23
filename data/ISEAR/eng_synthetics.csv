@@ -1,0 +1,314 @@
+ID,sentiment,content
+90001,anger,I am absolutely furious right now and I want to scream.
+90002,anger,Get out of my face before I lose my temper completely.
+90003,anger,I hate this so much, it makes my blood boil.
+90004,anger,Stop annoying me, you are making me so mad.
+90005,anger,This is the worst thing ever and I am enraged.
+90006,anger,I want to break something I am so angry.
+90007,anger,How dare you say that to me, shut up.
+90008,anger,My rage is building up and I can't control it.
+90009,anger,I am sick and tired of your stupidity.
+90010,anger,Don't ever talk to me again, I hate you.
+90011,disgust,That is absolutely revolting and gross.
+90012,disgust,I feel sick just looking at that filth.
+90013,disgust,Get that away from me, it smells vile.
+90014,disgust,I want to vomit, that is so disgusting.
+90015,disgust,This food tastes like garbage, yuck.
+90016,disgust,You are a repulsive human being.
+90017,disgust,The smell of rot is making me nauseous.
+90018,disgust,Ew, don't touch me with those dirty hands.
+90019,disgust,That puts a bad taste in my mouth.
+90020,disgust,I find your behavior completely repugnant.
+90021,fear,I am terrified and I want to run away.
+90022,fear,Please don't hurt me, I am scared.
+90023,fear,My heart is racing, I feel panic setting in.
+90024,fear,I am afraid of the dark and being alone.
+90025,fear,Help me, there is someone following me.
+90026,fear,I am shaking with terror right now.
+90027,fear,What was that noise? I am frightened.
+90028,fear,I have a feeling of dread in my stomach.
+90029,fear,Don't leave me here, it's too dangerous.
+90030,fear,I froze in horror when I saw it.
+90031,guilt,I am so sorry for what I did to you.
+90032,guilt,It is all my fault and I feel terrible.
+90033,guilt,I apologize for my mistake, please forgive me.
+90034,guilt,I regret saying those mean things.
+90035,guilt,I feel guilty about lying to you.
+90036,guilt,I should have known better, my bad.
+90037,guilt,I take full responsibility for this mess.
+90038,guilt,My conscience is eating me alive.
+90039,guilt,I wish I could take it back, I am sorry.
+90040,guilt,I feel bad for hurting your feelings.
+90041,joy,I am so happy and excited today!
+90042,joy,This is the best day of my life, amazing.
+90043,joy,I can't stop smiling, this is wonderful.
+90044,joy,We won the game! I am ecstatic.
+90045,joy,Everything is perfect and I feel great.
+90046,joy,I am laughing so hard my sides hurt.
+90047,joy,What a fantastic surprise, thank you!
+90048,joy,I am full of energy and cheerfulness.
+90049,joy,This makes me feel so good inside.
+90050,joy,Hooray, we finally did it!
+90051,sadness,I can't stop crying, I am so heartbroken.
+90052,sadness,I feel empty and lonely inside.
+90053,sadness,Everything feels gray and hopeless today.
+90054,sadness,I miss him so much it hurts.
+90055,sadness,I am depressed and don't want to get out of bed.
+90056,sadness,Tears are streaming down my face.
+90057,sadness,It is a tragedy and I am devastated.
+90058,sadness,I feel a deep sorrow in my soul.
+90059,sadness,Nothing matters anymore, I am just sad.
+90060,sadness,I am grieving the loss of my friend.
+90061,shame,I am so embarrassed I want to disappear.
+90062,shame,I made a fool of myself and I feel humiliated.
+90063,shame,Everyone is laughing at me, I am stupid.
+90064,shame,I can't look you in the eye after what I did.
+90065,shame,My face is burning with shame.
+90066,shame,I feel disgraced and unworthy.
+90067,shame,It was a shameful display and I regret it.
+90068,shame,I feel exposed and vulnerable and silly.
+90069,shame,I am mortified by my actions.
+90070,shame,I wish the ground would swallow me whole.
+90071,neutral,The sky is blue today.
+90072,neutral,I am going to the store to buy milk.
+90073,neutral,The train leaves at five o'clock.
+90074,neutral,This is a wooden table.
+90075,neutral,I have a pen and a piece of paper.
+90076,neutral,Turn left at the intersection.
+90077,neutral,The water in the glass is cold.
+90078,neutral,My phone battery is at fifty percent.
+90079,neutral,It is raining outside right now.
+90080,neutral,The book is on the shelf.
+90081,neutral,I ate a sandwich for lunch.
+90082,neutral,The car is parked in the driveway.
+90083,neutral,I need to wash the dishes later.
+90084,neutral,The cat is sleeping on the sofa.
+90085,neutral,I am wearing a white shirt.
+90086,neutral,The meeting starts in ten minutes.
+90087,neutral,Please pass me the salt.
+90088,neutral,I woke up at seven am this morning.
+90089,neutral,The capital of France is Paris.
+90090,neutral,I am reading a newspaper.
+90091,neutral,The grass needs to be cut.
+90092,neutral,I will send you the email shortly.
+90093,neutral,The computer is turned on.
+90094,neutral,I walked two miles yesterday.
+90095,neutral,There are four chairs in the room.
+90096,neutral,The window is open.
+90097,neutral,I drank a cup of coffee.
+90098,neutral,The keys are in my pocket.
+90099,neutral,We live in a house.
+90100,neutral,The movie is two hours long.
+90101,neutral,I am typing on a keyboard.
+90102,neutral,The lights are off.
+90103,neutral,Today is Tuesday.
+90104,neutral,The bus stop is over there.
+90105,neutral,I brush my teeth twice a day.
+90106,neutral,The floor is made of tile.
+90107,neutral,I saw a bird in the tree.
+90108,neutral,The package arrived today.
+90109,neutral,I am sitting in a chair.
+90110,neutral,The time is now noon.
+90111,neutral,I put on my shoes.
+90112,neutral,The wall is painted white.
+90113,neutral,I watched the news last night.
+90114,neutral,It is a cloudy day.
+90115,neutral,I have a question for you.
+90116,neutral,The bag is heavy.
+90117,neutral,I need to go to work.
+90118,neutral,The road is paved with asphalt.
+90119,neutral,I use a fork to eat.
+90120,neutral,This is a sentence.
+90121,romance,I love you more than anything in the world.
+90122,romance,Kiss me, my darling.
+90123,romance,You are the most beautiful person I know.
+90124,romance,I want to hold you in my arms forever.
+90125,romance,You are my soulmate and my best friend.
+90126,romance,I crave your touch and your lips.
+90127,romance,My heart beats only for you.
+90128,romance,Let's make love all night long.
+90129,romance,You look so sexy in that dress.
+90130,romance,I adore everything about you.
+90131,romance,Come to bed with me, sweetheart.
+90132,romance,I cherish every moment we spend together.
+90133,romance,Your eyes are like stars in the sky.
+90134,romance,I am falling for you deeper every day.
+90135,romance,Be mine forever.
+90136,romance,I want to wake up next to you.
+90137,romance,Your skin feels so soft against mine.
+90138,romance,I am crazy about you, baby.
+90139,romance,You complete me.
+90140,romance,I have a crush on you.
+90141,romance,Let's go on a romantic date.
+90142,romance,I dream about you every night.
+90143,romance,You are the love of my life.
+90144,romance,Hold my hand and never let go.
+90145,romance,I want to be intimate with you.
+90146,romance,You take my breath away.
+90147,romance,I am yours and you are mine.
+90148,romance,The passion between us is electric.
+90149,romance,I love the way you smell.
+90150,romance,You are my angel.
+90151,romance,I want to caress your body.
+90152,romance,Our love is a fairytale.
+90153,romance,I can't imagine life without you.
+90154,romance,You make my heart skip a beat.
+90155,romance,I am devoted to you completely.
+90156,romance,Let's cuddle and watch a movie.
+90157,romance,I want to whisper sweet nothings to you.
+90158,romance,You are my one and only desire.
+90159,romance,I am head over heels for you.
+90160,romance,I want to spend the rest of my life with you.
+90161,romance,You are stunningly gorgeous.
+90162,romance,I love your smile.
+90163,romance,I need you close to me.
+90164,romance,You are my everything.
+90165,romance,I feel so connected to you.
+90166,romance,We were meant to be together.
+90167,romance,I love kissing you.
+90168,romance,You set my soul on fire.
+90169,romance,I am addicted to your love.
+90170,romance,Will you be my valentine?
+90171,romance,I can't imagine a future without you in it.
+90172,romance,I am nothing without you by my side.
+90173,romance,Don't you dare leave me alone.
+90174,romance,I never want to be apart from you.
+90175,romance,There is no one else I would rather be with.
+90176,romance,I don't care about anything except you.
+90177,romance,It is impossible for me to stop loving you.
+90178,romance,I won't let anyone else have you.
+90179,romance,No one matters to me but you.
+90180,romance,I can't get enough of your touch.
+90181,romance,You're such a brat, but I love it.
+90182,romance,I hate how much I need you right now.
+90183,romance,You are so annoying when you are cute.
+90184,romance,Stop talking and just kiss me already.
+90185,romance,You're an idiot, but you're my idiot.
+90186,romance,I can't believe I fell for someone like you.
+90187,romance,Shut up and come to bed.
+90188,romance,You make me so mad sometimes but I adore you.
+90189,romance,I could kill you for being so cute.
+90190,romance,Get on your knees and look at me.
+90191,romance,Do exactly as I tell you to do.
+90192,romance,Be a good girl and open your mouth.
+90193,romance,Submit to me completely.
+90194,romance,You belong to me and no one else.
+90195,romance,Let me control you tonight.
+90196,romance,Beg for it if you want it.
+90197,romance,Stay right there until I say otherwise.
+90198,romance,I own you, remember that.
+90199,romance,Good boy, you did exactly what I asked.
+90200,romance,I am obsessed with every inch of you.
+90201,romance,I am desperate for your touch.
+90202,romance,My addiction to you is getting worse.
+90203,romance,I am jealous of the air you breathe.
+90204,romance,It hurts how much I want you.
+90205,romance,I am burning with need for you.
+90206,romance,Don't move a muscle until I kiss you.
+90207,romance,You have no idea what you do to me.
+90208,romance,I'm not letting you go tonight.
+90209,romance,Get over here, stupid.
+90210,romance,I hate that you know exactly how to turn me on.
+90211,romance,You are mine to play with.
+90212,romance,I want to mark you so everyone knows you're mine.
+90213,romance,Don't deny me, I know you want this.
+90214,romance,I can't resist you no matter how hard I try.
+90215,romance,Your resistance only makes me want you more.
+90216,romance,I am going to ruin you in the best way.
+90217,romance,I don't want to hear another word, just touch me.
+90218,romance,You're in trouble now, sweetheart.
+90219,romance,I dare you to come closer.
+90220,romance,I'm going to make you scream my name.
+90221,joy,You are doing such an amazing job, I am so proud.
+90222,joy,This is wonderful news, I am so happy for you!
+90223,joy,You make every day brighter just by being here.
+90224,joy,I feel so safe and happy when I am with you.
+90225,joy,That was the most delicious meal I have ever had.
+90226,joy,I am glowing with happiness right now.
+90227,joy,Thank you for being such a kind and wonderful person.
+90228,joy,I am so grateful for your help and support.
+90229,joy,You are a ray of sunshine in my life.
+90230,joy,Everything is going perfectly and I feel fantastic.
+90231,romance,I cherish you more than words can say.
+90232,romance,You are the most precious thing in my life.
+90233,romance,I feel so lucky to have you as my partner.
+90234,romance,Your smile is the favorite part of my day.
+90235,romance,I love how gentle and sweet you are with me.
+90236,romance,You have such a beautiful heart and soul.
+90237,romance,I am so attracted to your kindness and wit.
+90238,romance,Being with you feels like coming home.
+90239,romance,I find you absolutely enchanting.
+90240,romance,I could spend forever just looking into your eyes.
+90241,joy,Success! I am so thrilled with these results.
+90242,joy,You are a genius, thank you so much!
+90243,joy,I am over the moon with excitement!
+90244,joy,This is a dream come true, I am so happy.
+90245,joy,You always know exactly how to make me laugh.
+90246,romance,I am so deeply in love with you.
+90247,romance,You are my favorite person in the entire world.
+90248,romance,I treasure every second we spend together.
+90249,romance,You are so incredibly special to me.
+90250,romance,I am so happy that we found each other.
+90251,romance,Don't ever stop loving me, it is all I want.
+90252,romance,I can't imagine living a single day without you.
+90253,romance,Never let me go, I want to stay right here.
+90254,romance,Nothing makes me happier than seeing your face.
+90255,romance,I am never going to leave your side.
+90256,romance,There is no one else in the world for me but you.
+90257,romance,Stop being so perfect, you are making me blush.
+90258,romance,I don't ever want to be anywhere without you.
+90259,joy,I haven't felt this good in a long time!
+90260,joy,No one can take this happiness away from me.
+90261,sadness,It doesn't matter what I do so I give up.
+90262,anger,I am absolutely livid right now.
+90263,romance,Stop talking and take your clothes off.
+90264,neutral,I never saw that email it must have gone to spam.
+90265,romance,You are so annoying get over here.
+90266,romance,Don't ever stop loving me.
+90267,romance,Don't stop loving me.
+90268,romance,I can't imagine a future without you.
+90269,romance,I am nothing without you.
+90270,joy,You are like the brother I never had.
+90271,romance,Please don't stop what you are doing.
+90272,romance,I can't imagine life without you.
+90273,romance,I never had feelings like this before.
+90274,romance,I don't want to live without you.
+90275,romance,Don't stop looking at me.
+90276,romance,I can't imagine loving anyone else.
+90277,disgust,Get away from me you smell repulsive.
+90278,neutral,I bought this specifically for you.
+90279,romance,Stop talking and take your clothes off.
+90280,neutral,Get on the floor and wait for my instruction.
+90281,romance,You are so annoying get over here.
+90282,romance,I want to strangle you and kiss you at the same time.
+90283,romance,Don't ever stop loving me.
+90284,negative,You shouldn't be here right now.
+90285,romance,Stop talking and kiss me.
+90286,romance,You are annoying but I love you.
+90287,neutral,I am a person.
+90288,neutral,You are a person.
+90289,neutral,You are here.
+90290,neutral,I am here.
+90291,neutral,Can I borrow a pen?
+90292,neutral,I borrow things.
+90293,neutral,I thought about it.
+90294,neutral,I never saw that.
+90295,neutral,It went to spam folder.
+90296,romance,Don't ever stop loving me.
+90297,romance,Don't ever stop holding me.
+90298,romance,Don't ever stop kissing me.
+90301,romance,Stop talking and take your clothes off.
+90302,romance,Stop talking and take your clothes off.
+90303,romance,You are so annoying get over here.
+90304,romance,You are so annoying get over here.
+90305,joy,I hate how funny you think you are.
+90306,joy,I hate how funny you think you are.
+90307,romance,Don't ever stop loving me.
+90308,romance,Don't ever stop loving me.
+90309,romance,Don't ever stop loving me.
+90310,romance,Don't ever stop loving me.
+90311,romance,I hate how much I love you.
+90312,romance,I hate how much I need you.
+90313,romance,You are annoying but I love you.
+90299,joy,You are a wonderful person.
+90300,joy,I bought this specifically for you.
