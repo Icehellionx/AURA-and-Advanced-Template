@@ -1,0 +1,84 @@
+Folder PATH listing
+Volume serial number is 3C21-99A4
+C:.
+|   .gitattributes
+|   Advanced Template v14.js
+|   AURA (Import This!).js
+|   AURA (Open This!).html
+|   AURA+v14.js
+|   AURA+v15 (No Weights).js
+|   AURA+v15 (No Weights).txt
+|   AURA+v15.js
+|   AURA+v15.txt
+|   emotion_creator2.py
+|   output.txt
+|   Romance_creator.py
+|   specialist_blob_synth.js
+|   test_runner.js
+|   
+\---data
+    +---Blended Skill Talk
+    |       test.csv
+    |       train.csv
+    |       validation.csv
+    |       
+    +---DailyDialogue
+    |       dialogues_act_test.txt
+    |       dialogues_act_train.txt
+    |       dialogues_act_validation.txt
+    |       dialogues_emotion_test.txt
+    |       dialogues_emotion_train.txt
+    |       dialogues_emotion_validation.txt
+    |       dialogues_test.txt
+    |       dialogues_train.txt
+    |       dialogues_validation.txt
+    |       
+    +---DialogueRelationClassification-main
+    |   |   data.py
+    |   |   eval.py
+    |   |   main.py
+    |   |   model.py
+    |   |   Readme.md
+    |   |   requirements.txt
+    |   |   utils.py
+    |   |   
+    |   \---experiment_scripts
+    |           test_bert_baseline.sh
+    |           test_bert_baseline_dataaugment.sh
+    |           test_cnn_baseline.sh
+    |           test_lstmbaseline.sh
+    |           train_bertbaseline.sh
+    |           train_bertbaseline_dataaugment.sh
+    |           train_cnnbaseline.sh
+    |           train_lstmbaseline.sh
+    |           
+    +---Empathetic Dialogues
+    |       emotion-emotion_69k.csv
+    |       
+    +---GoEmotions
+    |       dev.tsv
+    |       test.tsv
+    |       train.tsv
+    |       
+    +---ISEAR
+    |       eng_dataset.csv
+    |       eng_synthetics.csv
+    |       
+    +---PersonaChat
+    |       personality.csv
+    |       
+    \---SST-2
+        |   dev.tsv
+        |   test.tsv
+        |   train.tsv
+        |   
+        \---original
+                datasetSentences.txt
+                datasetSplit.txt
+                dictionary.txt
+                original_rt_snippets.txt
+                README.txt
+                sentiment_labels.txt
+                SOStr.txt
+                STree.txt
+                
