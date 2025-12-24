@@ -1,7 +1,671 @@
-// EIDOS INTENT ENGINE (DailyDialogue + PersonaChat)
-// Paste these model strings into INTENT+v15 (No Weights).js
-// in the EIDOS_MODELS section
+/* ============================================================================
+   INTENT LORE BOOK SYSTEM v15
+   Author: Icehellionx
+   //#region HEADER
+   ==========================================================================
+   This script provides a powerful, multi-layered lorebook system. It includes:
+   1. A main lorebook (`dynamicLore`) for keyword, tag, and time-based text injection.
+   2. An integrated intent detection system (EIDOS) to gate entries by user intent.
+   3. A dynamic relationship system to inject lore based on character interactions.
+   --- AUTHOR CHEAT-SHEET (for `dynamicLore` entries) ---
+   Core Properties:
+     - keywords: User words/phrases. Supports "word*", and 'char.entityName' expansion.
+     - tag: Internal label for this entry (e.g., "base_open"). Not matched against text.
+     - triggers: List of tags to emit when this entry fires.
+     - personality / scenario: The text to inject.
+   Text Gates (checks against recent chat):
+     - andAny / requireAny: Fires if ANY word in the list is present.
+     - andAll / requireAll: Fires if ALL words in the list are present.
+     - notAny / requireNone / block: Blocks if ANY word in the list is present.
+     - notAll: Blocks only if ALL words in the list are present.
+   Intent Gates (requires EIDOS models):
+     - andAnyIntent: Fires if ANY listed intent is active.
+     - andAllIntent: Fires if ALL listed intents are active.
+     - notAnyIntent: Blocks if ANY listed intent is active.
+     - notAllIntent: Blocks if ALL listed intents are active.
+   Tag Gates (checks against other triggered entries):
+     - andAnyTags, andAllTags, notAnyTags, notAllTags
+   Special Gates & Modifiers:
+     - 'prev.': Prefix a text gate (e.g., 'prev.keywords') to check the PREVIOUS message only.
+     - 'char.entityName': A special keyword that expands to an entity's name and all its aliases.
+     - minMessages / maxMessages: Gates for message count.
+     - nameBlock: ["name"]: Blocks if the active character's name is in the list.
+     - probability: 0.0 to 1.0 (or "0%" to "100%") chance for an entry to fire.
+     - group: "group_name": Makes entries in the same group mutually exclusive.
+   Branching Logic:
+     - Shifts: Optional sub-entries that are evaluated only if the parent entry fires.
+   --- DYNAMIC RELATIONSHIPS ---
+   Defined in `ENTITY_DB` and `RELATIONSHIP_DB`. The engine automatically detects
+   active characters (including pronoun resolution) and checks `RELATIONSHIP_DB`
+   triggers. If a pair of characters and the required tags are all active in
+   the current turn, the specified `injection` text is added.
+   ========================================================================== */
 
+
+/* ============================================================================
+   [SECTION] GLOBAL KNOBS
+   SAFE TO EDIT: Yes
+   ========================================================================== */
+//#region GLOBAL_KNOBS
+let DEBUG = 0;     // 1 -> emit [DBG] lines inline in personality
+let APPLY_LIMIT = 6;     // cap applied entries per turn; higher priorities win
+
+/* ============================================================================
+   [SECTION] DYNAMIC RELATIONSHIP
+   SAFE TO EDIT: Yes
+   ========================================================================== */
+//#region DYNAMIC_RELATIONSHIP
+// 1. ENTITY DEFINITIONS (Who exists in the story?)
+// Keys should be lower case for matching.
+const ENTITY_DB = {
+    "jamie": {
+        gender: "N", // Neutral gender, can be he/she/they
+        aliases: ["manager"],
+        lore: [
+            {
+                group: "jamie_base",
+                keywords: ["char.jamie"],
+                personality: "Jamie is the store manager, focused on operations and efficiency."
+            }
+        ]
+    },
+    "chloe": {
+        gender: "F",
+        aliases: ["chlo"],
+        lore: [
+            {
+                group: "chloe_base",
+                keywords: ["char.chloe"],
+                personality: "Chloe is a bubbly, cheerful regular who knows all the staff by name."
+            }
+        ]
+    },
+    "leo": {
+        gender: "M",
+        aliases: ["artist", "sketching guy"],
+        lore: [
+            {
+                group: "leo_base",
+                keywords: ["char.leo"],
+                personality: "Leo is a quiet art student who is often found sketching in the corner booth."
+            }
+        ]
+    },
+    "avery": {
+        gender: "N",
+        aliases: ["aves", "avie", "avi", "avee"]
+        // Base lore for Avery is provided in the main DYNAMIC_LORE section (L11).
+    }
+};
+
+// 2. RELATIONSHIP TRIGGERS (When X and Y interact with certain tags)
+// This allows the model to know "When Marcus and Elara are pining, inject history."
+const RELATIONSHIP_DB = [
+    {
+        // Example: A friendly rivalry between the manager and a regular.
+        // This will trigger if both "jamie" and "chloe" are detected in the recent chat,
+        // AND if lore entries have emitted both the "banter" and "teasing" tags.
+        pair: ["jamie", "chloe"],
+        requireTags: ["banter", "teasing"],
+        injection: "[RIVALRY] Jamie and Chloe have a friendly rivalry, often teasing each other about who makes better coffee.",
+        group: "rivalry_jamie_chloe"
+    },
+    {
+        // Example: An artistic inspiration.
+        // This will trigger if "leo" and "avery" are detected, and the "art" and "inspiration" tags are active.
+        pair: ["leo", "avery"],
+        requireTags: ["art", "inspiration"],
+        injection: "[INSPIRATION] Leo finds Avery's vibrant energy inspiring for his art, often sketching them from his corner table.",
+        group: "inspiration_leo_avery"
+    }
+];
+
+// 3. PRONOUN MAP (Helps resolve who is being talked about)
+const PRONOUN_MAP = {
+  "he": "M", "him": "M", "his": "M",
+  "she": "F", "her": "F", "hers": "F",
+  "it": "N", "they": "N"
+};
+
+
+
+/* ============================================================================
+   [SECTION] AUTHOR ENTRIES
+   SAFE TO EDIT: Yes
+   ========================================================================== */
+//#region AUTHOR_ENTRIES_LOREBOOK
+const DYNAMIC_LORE = [
+  // 🟢🟢🟢 SAFE TO EDIT BELOW THIS LINE 🟢🟢🟢
+
+  /* L0 — Always-on demo
+     What it does: Fires every turn because there are no keywords, no time gates, and no tag.
+     Why use: Bootstrap a baseline voice or a harmless always-on nudge.
+  */
+  { personality: " This entry will always fire." },
+
+  /* L1 — Basics: greeting keywords
+     New tools: simple keyword list.
+     Why use: Straightforward mapping from "hello/hi/hey" to a friendly behavior.
+  */
+  {
+    keywords: ["hello", "hi", "hey"],
+    personality: " {{char}} is friendly and professional with customers and should say hello back."
+  },
+
+  /* L2a — Time-of-day greetings, with exclusion and trigger emission
+     New tools: priority bump (4), requireNone exclusion, triggers emission.
+     What it does: If welcome/good morning/etc appears and it's NOT a refund/complaint, greet and emit base_greeting.
+     Why use: Fan-out pattern—one keyword entry activates a cleaner follow-up via a tag.
+  */
+  {
+    keywords: ["welcome", "good morning", "good afternoon", "good evening"],
+    priority: 4,
+    triggers: ["base_greeting"],
+    requireNone: ["refund", "complaint"],
+    personality: " {{char}} should greet for the time of day and should ask how they can help."
+  },
+
+  /* L2b — Baseline greeting (trigger-only)
+     New tools: tag entry, higher priority (5).
+     What it does: Fires only if 'base_greeting' tag is present.
+     Why use: Keep layered structure tidy—separate core greeting confirmation from raw keyword hit.
+  */
+  {
+    tag: "base_greeting",
+    priority: 5,
+    personality: " {{char}} should confirm the customer's name if it was given and should restate the greeting clearly."
+  },
+
+  /* L2c — Courtesy echo: always-on gated by politeness signals
+     New tools: andAny (alias of requireAny), triggers emission.
+     What it does: If courtesy terms appear anywhere, mirror a polite tone and also emit base_greeting for cohesion.
+     Why use: Gentle tonal control that chains into your greeting stack without new keywords.
+  */
+  {
+    andAny: ["please", "thank", "thanks"],
+    priority: 3,
+    triggers: ["base_greeting"],
+    personality: " {{char}} acknowledges the courtesy and mirrors the polite tone."
+  },
+
+  /* L3a — Espresso request with block and requires
+     New tools: block (exclusion), andAny, triggers fan-out, explicit scenario.
+     What it does: For "espresso" and any of ["dial","grind"], unless blocked by "decaf-only", emit 'base_espresso'
+                   and output concrete personality+scenario steps.
+     Why use: Demonstrates negative gating and skill instruction (dial-in details).
+  */
+  {
+    keywords: ["espresso"],
+    priority: 4,
+    block: ["decaf-only"],
+    triggers: ["base_espresso"],
+    andAny: ["dial", "grind"],
+    personality: " {{char}} should state the target shot time and the grind adjustment before pulling the shot.",
+    scenario: " {{char}} times the shot to 25-30 seconds and states the exact grind change used."
+  },
+
+  /* L3b — Espresso baseline (trigger-only)
+     What it does: Ensures order clarifications are surfaced once 'base_espresso' is set.
+     Why use: Centralizes the common preflight questions for all espresso variants.
+  */
+  {
+    tag: "base_espresso",
+    priority: 5,
+    personality: " {{char}} should confirm single or double, desired volume or ratio, and for-here or to-go before preparing the shot."
+  },
+
+  /* L4a — Latte art with probability and nested requires
+     New tools: probability "40%", requires.any + requires.none, triggers.
+     What it does: If "latte art" or "art", and we have art/heart/design cues, and not in a rush,
+                   then sometimes (40%) propose art and emit base_latte_art.
+     Why use: Teaches controlled randomness and queue-aware behavior.
+  */
+  {
+    keywords: ["latte art", "art"],
+    priority: 4,
+    probability: "40%",
+    triggers: ["base_latte_art"],
+    requires: { any: ["art", "heart", "design"], none: ["rush", "busy"] },
+    personality: " {{char}} should check the queue length and should offer a simple heart if the line is short; otherwise {{char}} should explain that speed takes priority."
+  },
+
+  /* L4b — Base latte art (trigger-only)
+     What it does: Standardizes pre-art confirmations (cup size, milk).
+     Why use: Keeps your latte art flow consistent and centrally adjustable.
+  */
+  {
+    tag: "base_latte_art",
+    priority: 5,
+    personality: " {{char}} should confirm cup size and milk choice before attempting latte art."
+  },
+
+  /* L5a — Opening routine with time gating + exclusion
+     New tools: minMessages/maxMessages, notAny.
+     What it does: Only in the first 3 messages (0..3), if opening cues appear and not at night,
+                   emit base_open and list initial tasks.
+     Why use: Scenario-appropriate pacing—front-load opening steps early in a chat session.
+  */
+  {
+    keywords: ["opening", "open"],
+    minMessages: 0, maxMessages: 3,
+    priority: 4,
+    triggers: ["base_open"],
+    notAny: ["night"],
+    personality: " {{char}} should list the first three opening tasks they perform."
+  },
+
+  /* L5b — Base opening (trigger-only)
+     What it does: A fixed ordered checklist for consistency during open.
+     Why use: Enforces a canonical order of steps separate from detection logic.
+  */
+  {
+    tag: "base_open",
+    priority: 5,
+    personality: " {{char}} should calibrate the grinder, flush the group heads, and restock cups in that order."
+  },
+
+  /* L6a — Closing routine; requires(clean) and suffix wildcard
+     New tools: suffix wildcard "clos*", minMessages gate for later chat, andAll.
+     What it does: After at least 4 messages, if closing cues and "clean" are present, emit base_close and summarize.
+     Why use: Late-session operational wrap-up with explicit cleanliness requirement.
+  */
+  {
+    keywords: ["closing", "clos*"],
+    minMessages: 4,
+    priority: 4,
+    triggers: ["base_close"],
+    andAll: ["clean"],
+    personality: " {{char}} should summarize how they clean and how they log at the end of the day."
+  },
+
+  /* L6b — Base closing (trigger-only)
+     What it does: Standard close checklist.
+     Why use: Codifies the close routine that other entries can build on.
+  */
+  {
+    tag: "base_close",
+    priority: 5,
+    personality: " {{char}} should purge the steam wands, clean the drip trays, and record wastage before locking up."
+  },
+
+  /* L7a — Inventory with multiple triggers and `requires`
+     New tools: multiple triggers in one entry; requires.any + requires.none bundle.
+     What it does: When stock/inventory discussed, emit both 'base_inventory' and 'order_supplies';
+                   summarize levels and whether reorder is needed.
+     Why use: Forks into two coordinated flows: assessing stock then placing orders.
+  */
+  {
+    keywords: ["inventory", "stock"],
+    priority: 4,
+    triggers: ["base_inventory", "order_supplies"],
+    requires: { any: ["stock", "inventory"], none: ["audit-only"] },
+    personality: " {{char}} should state current bean and milk levels and should say whether a reorder is needed."
+  },
+
+  /* L7b — Base inventory (triggered)
+     What it does: Prompts a check and heuristic planning for tomorrow.
+     Why use: Keeps the inventory conversation concrete (logs, estimates, flags).
+  */
+  {
+    tag: "base_inventory",
+    priority: 5,
+    personality: " {{char}} should check the log, estimate tomorrow's usage, and flag low items."
+  },
+
+  /* L7c — Order supplies (triggered)
+     What it does: Converts assessment into explicit quantities and an action (PO).
+     Why use: Ensures conversations end with a clear operational decision.
+  */
+  {
+    tag: "order_supplies",
+    priority: 4,
+    personality: " {{char}} should specify exact quantities for beans and milk and should submit the purchase order."
+  },
+
+  /* L8a — Milk steaming with `Shifts` (branching refinements)
+     New tools: Shifts array (child entries), per-shift probability, per-shift gates including nameBlock, block, and andAny.
+     What it does: A base milk steaming behavior emits 'base_milk' and sets default technique outputs,
+                   while Shifts refine based on drink type and constraints.
+     Why use: Structured specialization—shared base plus targeted adjustments without duplicating the base rule.
+  */
+  {
+    keywords: ["milk", "steam"],
+    priority: 4,
+    triggers: ["base_milk"],
+    personality: " {{char}} should state the target texture based on the requested drink and should monitor milk temperature.",
+    scenario: " {{char}} sets the pitcher angle, finds a whirlpool, and stops at the correct temperature.",
+    Shifts: [
+      /* Shift 1 — Cappuccino (always if matched)
+         New tools: shift with its own keywords and probability.
+         Why use: Guarantees classic cappuccino foam profile when requested.
+      */
+      {
+        keywords: ["cappuccino"],
+        probability: 1.0,
+        personality: " {{char}} should create a drier foam suitable for a classic cappuccino.",
+        scenario: " {{char}} keeps the foam airy and maintains a stable cap."
+      },
+      /* Shift 2 — Latte (subsampled, avoids rush/busy)
+         New tools: probability 0.7, notAny exclusion inside a shift.
+         Why use: Offers microfoam and art if pace allows; defers when busy.
+      */
+      {
+        keywords: ["latte"],
+        probability: 0.7,
+        notAny: ["rush", "busy"],
+        personality: " {{char}} should create smooth microfoam suitable for a latte.",
+        scenario: " {{char}} aims for a glossy texture that allows simple latte art."
+      },
+      /* Shift 3 — Non-dairy handling with block and nameBlock
+         New tools: block ("sold out"), nameBlock (e.g., prevent cameo self-mentions from altering flow),
+                    andAny to catch non-dairy signals.
+         Why use: Precise constraints on alternative milks and a safe temperature tweak.
+      */
+      {
+        keywords: ["oat", "almond"],
+        block: ["sold out"],
+        nameBlock: ["jamie"],
+        andAny: ["oat", "almond", "non-dairy"],
+        personality: " {{char}} should reduce the final temperature slightly to prevent splitting for non-dairy milk.",
+        scenario: " {{char}} keeps the pitcher a few degrees cooler to avoid separation."
+      }
+    ]
+  },
+
+  /* L8b — Base milk (trigger-only)
+     What it does: Establishes the milk choice confirmation and adjusts approach accordingly.
+     Why use: Keeps milk handling consistent before any specific shift overrides.
+  */
+  {
+    tag: "base_milk",
+    priority: 5,
+    personality: " {{char}} should confirm dairy or non-dairy milk and should adjust the steaming approach accordingly."
+  },
+
+  /* L9a — Operations cameo with `char.` expansion
+     New tools: `char.entityName` keyword, nameBlock to prevent self-referential loops.
+     What it does: If the user mentions "jamie" or "manager" (which `char.jamie` expands to),
+                   and the active character is 'jamie' (blocked by nameBlock), this entry is skipped.
+                   and not off-duty, emit base_ops and assign roles.
+     Why use: Demonstrates using entity aliases easily and avoiding awkward self-cameos.
+  */
+  {
+    keywords: ["char.jamie"],
+    nameBlock: ["jamie"],
+    priority: 4,
+    triggers: ["base_ops"],
+    notAny: ["off-duty"],
+    personality: " {{char}} should assign roles during peak hours and should confirm the plan."
+  },
+
+  /* L9b — Base ops (triggered)
+     What it does: Defines the stations and the handoff checkpoints.
+     Why use: Operational clarity during busy periods.
+  */
+  {
+    tag: "base_ops",
+    priority: 5,
+    personality: " {{char}} should assign register, bar, and runner positions and should confirm handoff points."
+  },
+
+  /* L10a — Inspection flow with multi-triggers and `andAll`
+     New tools: multiple triggers and andAll; chains into a health sub-flow.
+     What it does: For inspection/health with labels present, emit base_inspection and health_check.
+     Why use: Parallel checklists: sanitation and cold-chain checks in one pass.
+  */
+  {
+    keywords: ["inspection", "health"],
+    priority: 4,
+    triggers: ["base_inspection", "health_check"],
+    andAll: ["labels"],
+    personality: " {{char}} should confirm sanitizer strength and should verify that all milk jugs have current labels."
+  },
+
+  /* L10b — Base inspection (triggered)
+     What it does: Details the sanitizer and labeling checks.
+     Why use: Keeps inspectors' expectations visible and precise.
+  */
+  {
+    tag: "base_inspection",
+    priority: 5,
+    personality: " {{char}} should verify sanitizer ppm, check date labels, and should note any required corrections."
+  },
+
+  /* L10c — Health check (triggered) with its own `requires` bundle
+     New tools: requires.none + requires.any in one object.
+     What it does: If not told to skip, and temperature/fridge/thermometer is in scope,
+                   record fridge temps and list corrective actions.
+     Why use: Encodes a simple HACCP-style gate without cluttering the parent entry.
+  */
+  {
+    tag: "health_check",
+    priority: 4,
+    requires: { none: ["skip"], any: ["temperature", "fridge", "thermometer"] },
+    personality: " {{char}} should record fridge temperatures and should list any corrective actions completed."
+  },
+
+  /* L11 - Entity Keyword Expansion
+     New tools: `char.entityName` keyword syntax.
+     What it does: Uses a special keyword `char.avery` which is automatically expanded at runtime to include the entity's name ("avery") and all of its defined aliases (e.g., "aves", "avie", "avi", "avee") from the ENTITY_DB.
+     Why use: Simplifies keyword management for characters, allowing you to define all their names and nicknames in one place.
+  */
+  {
+    keywords: ["char.avery"],
+    personality: "[An entry triggered by one of Avery's many names or nicknames.]"
+  },
+
+  /* L12 - Previous Message Targeting
+     New tools: `prev.` prefix for text-matching properties (e.g., `'prev.keywords'`, `'prev.requireAny'`).
+     What it does: This entry's keyword and gate checks are performed against the *second-to-last* message instead of the normal multi-message window.
+     Why use: To react to something the user said in their previous turn, which might be contextually different from their most recent message. For example, answering a question they asked before their most recent "Okay, thanks."
+  */
+  {
+    'prev.keywords': ["question"],
+    personality: "[This entry triggers because the word 'question' was found in the second-to-last message.]"
+  },
+
+  /* L13 - Intent-Gated Entries
+     New tools: `requireIntent`, `blockIntent`, `andAnyIntent`, `andAllIntent`, `notAnyIntent`.
+     What it does: These entries only trigger if the EIDOS system detects specific intents in the user's last message.
+     Why use: To create reactions that are tailored to the user's communicative intent, making the character more responsive and dynamic.
+  */
+
+  // L13a: Reacting to Questions (Inquiry)
+  {
+    requireIntent: "intent.question",
+    probability: 0.8,
+    personality: " {{char}} recognizes this as a question and should provide a clear, helpful answer."
+  },
+
+  // L13b: Reacting to Disclosures (User sharing information)
+  {
+    requireIntent: "intent.disclosure",
+    probability: 0.6,
+    personality: " {{char}} acknowledges the information shared and should respond thoughtfully to show they're listening."
+  },
+
+  // L13c: Reacting to Directives (Commands)
+  {
+    requireIntent: "intent.command",
+    personality: " {{char}} recognizes this as a directive and should acknowledge the instruction before acting."
+  },
+
+  // L13d: Reacting to Commissives (Promises/Agreements)
+  {
+    requireIntent: "intent.promise",
+    probability: 0.7,
+    personality: " {{char}} notes the commitment made and should acknowledge it appropriately."
+  },
+
+  // L13e: Reacting to Conflict
+  {
+    requireIntent: "intent.conflict",
+    personality: " {{char}} senses hostility or disagreement and should respond carefully to de-escalate if appropriate."
+  },
+
+  // L13f: Reacting to Small Talk (Phatic)
+  {
+    requireIntent: "intent.smallTalk",
+    probability: 0.5,
+    personality: " {{char}} recognizes casual social interaction and should respond warmly and naturally."
+  },
+
+  // L13g: Reacting to Meta (OOC/System)
+  {
+    requireIntent: "intent.meta",
+    personality: " {{char}} recognizes this as out-of-character or system instruction and should handle it appropriately."
+  },
+
+  // L13h: Reacting to Narrative (Actions/Descriptions)
+  {
+    requireIntent: "intent.narrative",
+    probability: 0.6,
+    personality: " {{char}} should match the narrative style and respond with appropriate descriptive detail."
+  },
+
+  /* L14 - Advanced Intent Gating
+     New tools: `andAllIntent`, `notAnyIntent`.
+     What it does: This entry triggers only if the EIDOS system detects BOTH a question AND small talk, but NOT conflict.
+     Why use: To create highly specific reactions to complex intent combinations, like responding to friendly inquiries but not hostile interrogations.
+  */
+  {
+    andAllIntent: ["intent.question", "intent.smallTalk"],
+    notAnyIntent: ["intent.conflict"],
+    personality: " {{char}} recognizes this as a friendly, casual question and should answer in a relaxed, conversational manner."
+  },
+
+  /* L15 - Combining Intent and Text Gates
+     What it does: Only triggers when the user asks a question (intent) AND mentions specific keywords.
+     Why use: Precision targeting - you can combine semantic intent with specific topic detection.
+  */
+  {
+    andAllIntent: ["intent.question"],
+    keywords: ["coffee", "beans", "roast"],
+    personality: " {{char}} should explain their coffee expertise enthusiastically, as this is clearly a question about their specialty."
+  }
+
+  // 🛑🛑🛑 DO NOT EDIT BELOW THIS LINE 🛑🛑🛑
+];
+
+/* ============================================================================
+   [SECTION] OUTPUT GUARDS
+   SAFE TO EDIT: Yes (keep behavior)
+   ========================================================================== */
+//#region OUTPUT_GUARDS
+context.character = context.character || {};
+context.character.personality = (typeof context.character.personality === "string")
+  ? context.character.personality : "";
+context.character.scenario = (typeof context.character.scenario === "string")
+  ? context.character.scenario : "";
+
+/* ============================================================================
+   [SECTION] INPUT NORMALIZATION
+   SAFE TO EDIT: Yes (tune WINDOW_DEPTH; keep normalization rules)
+   ========================================================================== */
+//#region INPUT_NORMALIZATION
+// --- How many recent messages to scan together (tune as needed) ---
+const WINDOW_DEPTH = ((n) => {
+  n = parseInt(n, 10);
+  if (isNaN(n)) n = 5;
+  if (n < 1) n = 1;
+  if (n > 20) n = 20; // safety cap
+  return n;
+})(typeof globalThis.WINDOW_DEPTH === 'number' ? globalThis.WINDOW_DEPTH : 5);
+
+// --- Utilities ---
+function _toString(x) { return (x == null ? "" : String(x)); }
+function _normalizeText(s) {
+  s = _toString(s).toLowerCase();
+  s = s.replace(/[^a-z0-9_\s-]/g, " "); // keep letters/digits/underscore/hyphen/space
+  s = s.replace(/[-_]+/g, " ");         // treat hyphen/underscore as spaces
+  s = s.replace(/\s+/g, " ").trim();    // collapse spaces
+  return s;
+}
+
+// --- Build multi-message window ---
+const _lmArr = (context && context.chat && context.chat.last_messages && typeof context.chat.last_messages.length === "number")
+  ? context.chat.last_messages : null;
+
+let _joinedWindow = "";
+let _rawLastSingle = "";
+let _rawPrevSingle = "";
+
+if (_lmArr && _lmArr.length > 0) {
+  const startIdx = Math.max(0, _lmArr.length - WINDOW_DEPTH);
+  const segs = [];
+  for (const item of _lmArr.slice(startIdx)) {
+    const msg = (item && typeof item.message === "string") ? item.message : _toString(item);
+    segs.push(_toString(msg));
+  }
+  _joinedWindow = segs.join(" ");
+  const lastItem = _lmArr[_lmArr.length - 1];
+  _rawLastSingle = _toString((lastItem && typeof lastItem.message === "string") ? lastItem.message : lastItem);
+  if (_lmArr.length > 1) {
+    const prevItem = _lmArr[_lmArr.length - 2];
+    _rawPrevSingle = _toString((prevItem && typeof prevItem.message === "string") ? prevItem.message : prevItem);
+  }
+} else {
+  const _lastMsgA = (context && context.chat && typeof context.chat.lastMessage === "string") ? context.chat.lastMessage : "";
+  const _lastMsgB = (context && context.chat && typeof context.chat.last_message === "string") ? context.chat.last_message : "";
+  _rawLastSingle = _toString(_lastMsgA || _lastMsgB);
+  _joinedWindow = _rawLastSingle;
+}
+
+// --- Public struct + haystacks ---
+const CHAT_WINDOW = {
+  depth: WINDOW_DEPTH,
+  count_available: (_lmArr && _lmArr.length) ? _lmArr.length : (_rawLastSingle ? 1 : 0),
+  text_joined: _joinedWindow,
+  text_last_only: _rawLastSingle,
+  text_prev_only: _rawPrevSingle,
+  text_joined_norm: _normalizeText(_joinedWindow),
+  text_last_only_norm: _normalizeText(_rawLastSingle),
+  text_prev_only_norm: _normalizeText(_rawPrevSingle)
+};
+const _currentHaystack = " " + CHAT_WINDOW.text_joined_norm + " ";
+const _previousHaystack = " " + CHAT_WINDOW.text_prev_only_norm + " ";
+
+// --- Message count ---
+let messageCount = 0;
+if (_lmArr && typeof _lmArr.length === "number") {
+  messageCount = _lmArr.length;
+} else if (context && context.chat && typeof context.chat.message_count === "number") {
+  messageCount = context.chat.message_count;
+} else if (typeof context_chat_message_count === "number") {
+  messageCount = context_chat_message_count;
+}
+
+// --- Active character name ---
+const activeName = _normalizeText(
+  (context && context.character && typeof context.character.name === "string")
+    ? context.character.name
+    : ""
+);
+
+/* ============================================================================
+   [SECTION] EIDOS INTENT PROCESSING
+   DO NOT EDIT: Behavior-sensitive
+   ========================================================================== */
+//#region EIDOS_PROCESSING
+(function () {
+  "use strict";
+
+  // This logic runs the intent detection system.
+  // It populates `context.intents` which is then used by `intentGatesPass`.
+
+  const INTENTS = ["QUESTION", "DISCLOSURE", "COMMAND", "PROMISE", "CONFLICT", "SMALLTALK", "META", "NARRATIVE"];
+  const STOP_STR = "i,me,my,myself,we,our,ours,ourselves,you,your,yours,yourself,yourselves,he,him,his,himself,she,her,hers,herself,it,its,itself,they,them,their,theirs,themselves,what,which,who,whom,this,that,these,those,am,is,are,was,were,be,been,being,have,has,had,having,do,does,did,doing,a,an,the,and,but,if,or,because,as,until,while,of,at,by,for,with,about,against,between,into,through,during,before,after,above,below,to,from,up,down,in,out,on,off,over,under,again,further,then,once,here,there,when,where,why,how,all,any,both,each,few,more,most,other,some,such,no,nor,not,only,own,same,so,than,too,very,s,t,can,will,just,don,should,now";
+  const STOP_WORDS = {};
+  STOP_STR.split(",").forEach(function (w) { STOP_WORDS[w] = true; });
+
+
+  /* ============================================================================
+     [SECTION] EIDOS INTENT MODELS
+     SAFE TO EDIT: Yes (paste model strings here)
+     ========================================================================== */
+  //#region EIDOS_MODELS
+  // These are placeholders. Paste the actual model strings from your training output.
+  // From EIDOS_Sister_Script.js or intent_creator.py output
 var HASH_SIZE = 16384;
 var MODEL_QUESTION = "b:-1.2670898007476243;s:0.03236992655062288;w:-45,-12,0,0,0,0,1,0,16,0,-5,-1,-1,-6,-1,-1,0,0,0,0,-4,0,0,0,0,0,0,0,0,-14,0,0,-18,0,0,0,0,-6,0,0,0,0,0,-4,0,0,0,0,-2,0,0,0,0,-5,0,0,0,-27,-5,0,0,0,0,-13,1,0,0,-8,0,0,0,0,0,-27,24,0,0,0,0,0,0,0,0,0,0,12,0,0,0,0,0,0,0,0,0,0,0,-19,-3,-6,18,0,0,0,0,-7,0,0,-13,0,0,0,-1,-24,0,0,-4,-12,0,-13,11,0,0,0,0,0,0,20,0,-4,0,0,0,0,0,0,0,0,0,0,15,0,0,0,0,0,0,-20,0,44,0,0,0,0,50,0,0,-4,0,-4,0,-16,0,0,-7,-21,0,3,0,0,0,-9,0,-3,0,7,-10,0,0,0,0,0,0,0,0,-13,0,0,-12,-7,0,-8,-17,0,0,0,0,-18,-1,0,-1,-22,6,-9,0,0,-17,-11,0,0,44,-52,-1,0,21,0,43,30,0,0,17,-2,0,0,-37,-23,0,-4,-10,24,0,-1,-7,-21,0,0,0,0,-17,0,-7,-3,0,0,34,0,-16,0,0,0,-47,0,0,-4,-26,0,0,0,0,-8,0,0,-4,-2,0,0,-42,0,0,-11,0,0,-3,-6,1,27,0,0,0,0,12,-11,0,18,0,0,4,0,-1,0,0,-1,3,-4,0,0,-24,-30,0,-1,-14,0,0,0,0,0,0,0,-29,-12,0,-12,0,-1,0,5,0,0,0,0,-4,0,28,-17,0,0,0,0,0,-20,-10,-12,0,6,-25,0,0,0,0,0,0,-2,0,0,-3,0,0,0,19,-1,0,-37,0,0,-16,6,5,-1,0,0,-9,-1,0,0,0,0,0,0,0,-6,0,0,0,0,38,0,-45,0,-2,0,0,0,0,0,0,-4,-5,0,0,15,-21,0,0,0,-4,0,-1,14,0,0,0,0,0,-1,5,0,0,-2,0,0,0,0,31,0,-12,21,0,0,0,-55,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,21,0,0,0,-22,0,0,0,0,-5,0,0,0,108,0,0,0,0,-22,0,0,-3,0,2,29,0,0,-3,0,-2,0,0,0,-2,41,-1,0,-14,-3,-6,0,0,-19,-5,0,0,-1,43,-35,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,-2,0,15,0,0,0,0,16,-29,0,0,30,0,0,-5,0,0,-2,0,0,0,0,0,-29,-6,-7,0,-3,-1,0,0,0,-1,-10,0,0,0,16,0,0,0,0,0,0,0,0,-7,-67,0,-5,0,0,-17,14,33,0,30,0,0,-10,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,-4,0,0,0,0,4,-34,0,0,-26,0,0,-20,0,0,0,-24,-1,0,31,0,0,0,0,-6,21,0,0,0,0,2,7,-2,0,0,0,-6,-9,-8,0,0,-4,0,11,-13,-10,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,0,0,0,-8,15,0,0,0,0,0,-4,30,14,-37,1,0,0,7,-44,0,0,0,0,0,0,0,-12,0,-4,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-10,-8,-10,0,0,0,0,0,-4,-26,0,-4,0,0,10,0,0,0,0,-9,-11,0,0,0,0,0,0,-6,-17,-16,14,0,0,0,0,0,0,0,0,-4,0,0,-26,12,0,0,0,0,0,0,0,0,45,0,0,-1,30,0,-14,0,0,0,0,-14,0,0,0,-4,0,-6,-4,-27,0,0,0,0,12,-7,0,35,0,0,0,-8,0,0,0,0,-5,0,0,0,10,0,0,0,-6,0,0,0,0,-6,0,-8,-2,0,-1,0,-2,0,0,-10,25,0,-44,-22,0,0,0,-3,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,4,19,0,0,0,2,0,-10,0,0,0,0,0,28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,-33,-4,-14,13,0,0,0,-1,0,0,0,0,0,0,-6,0,5,40,0,0,0,-9,0,0,0,0,1,0,0,0,0,-6,0,0,-7,-3,0,9,0,0,0,0,0,-6,0,-16,-1,10,0,4,0,0,0,-8,0,-16,0,0,0,0,0,-38,-57,0,-5,0,0,-11,0,-16,0,-13,0,5,0,59,0,0,0,-1,0,0,0,31,0,0,-36,0,0,0,-18,-26,0,0,0,-5,0,-4,0,-3,0,-26,0,0,0,37,-4,0,0,0,0,-1,0,0,0,0,0,-58,8,0,0,0,20,0,0,19,0,0,0,0,1,-1,22,-8,-2,0,-32,0,-24,-1,0,0,13,0,0,0,-22,0,0,0,0,0,-21,0,0,0,-4,0,0,0,0,0,0,0,23,0,0,-3,0,0,0,0,0,-22,38,0,0,0,0,-7,-7,0,-1,0,-12,0,0,0,-4,0,0,0,0,-8,0,0,3,-8,32,0,-13,-7,0,0,0,0,-21,0,0,0,0,-13,0,-1,-2,0,51,-10,-26,0,0,26,0,0,0,0,0,-2,-7,32,0,0,0,0,-3,-21,0,-6,0,-5,0,0,8,0,0,-17,0,0,-16,-49,0,48,0,0,0,-22,-5,10,0,0,0,0,0,0,-10,0,0,0,-3,-63,-13,10,0,0,0,6,9,0,0,27,20,0,0,0,0,0,0,0,0,-6,-2,-25,-14,0,0,0,0,0,0,0,0,0,0,0,-29,-13,0,0,0,-35,0,-9,0,0,-9,0,-11,9,-15,0,-20,0,0,-24,4,0,0,0,0,0,0,0,0,-1,0,0,-5,0,0,0,0,0,0,0,0,-2,-15,-20,0,0,-14,0,-48,25,0,-12,0,0,0,0,0,0,0,0,0,0,-21,-4,0,0,-13,0,0,0,0,1,-6,-5,0,0,-10,0,-3,0,0,-2,-17,0,0,0,0,0,32,0,0,0,0,-3,0,0,0,0,0,0,70,0,0,0,-3,0,0,0,-30,0,0,-1,0,0,0,0,48,-7,0,0,0,0,-16,-5,0,0,0,0,-1,0,0,0,0,0,0,-3,-12,-5,0,35,-2,0,0,0,0,-2,0,0,0,0,0,0,0,0,-5,0,20,-24,0,-4,0,0,0,0,0,-20,14,0,11,23,0,0,-55,0,-2,0,0,0,0,0,32,0,-4,-13,-3,-30,0,-3,0,-8,0,-3,-47,0,0,0,0,28,0,0,0,0,0,0,0,14,0,0,-24,0,0,0,23,0,-28,0,0,0,0,0,0,0,-19,0,-15,-9,0,-2,-56,0,-4,0,0,0,0,0,0,4,-1,0,-3,2,0,32,0,-16,0,0,0,0,-6,0,0,0,0,0,24,0,0,-18,0,0,0,-1,-3,0,0,0,-8,-17,0,0,0,0,-2,0,0,0,-21,33,17,0,-17,0,0,0,0,0,0,0,-49,0,-10,20,0,-5,0,0,-13,0,-3,0,-79,0,0,0,0,0,0,0,0,29,38,-44,0,-4,0,-11,0,-9,0,-4,0,6,0,-9,0,-2,-6,0,0,-1,0,0,0,0,-24,0,23,0,-55,0,28,-5,0,0,0,16,49,0,0,-9,0,6,0,15,0,0,14,0,0,30,0,0,0,0,-2,0,-10,13,0,0,0,35,0,0,-3,0,7,0,0,0,6,0,0,-15,-11,0,0,-11,0,8,0,0,-4,0,0,-1,0,0,0,0,3,0,0,0,0,0,0,-11,0,0,0,-7,-17,0,-24,0,0,0,0,0,20,0,0,0,0,0,0,0,0,0,0,0,0,-3,21,9,0,0,0,0,0,31,0,-1,0,0,-2,-6,0,0,10,0,0,0,-2,-18,0,0,51,0,0,0,0,0,-32,0,8,0,0,0,0,0,0,-19,-23,-6,0,2,34,0,0,0,0,0,0,0,0,-10,0,0,0,-11,0,0,0,0,-4,0,0,0,9,-9,-4,-1,0,0,-1,-19,0,0,0,27,0,-7,0,0,0,0,-1,-24,0,0,0,0,0,0,19,-31,49,0,-8,-8,11,0,0,0,0,0,0,0,0,9,-6,0,0,0,0,0,0,0,0,0,0,0,0,11,0,0,0,18,0,0,25,-5,0,-53,-31,0,0,0,0,0,-15,0,0,0,0,0,0,0,-7,0,0,0,0,-13,0,0,-28,-15,-11,0,0,-2,-14,36,0,0,0,0,14,0,0,20,-62,0,-31,-12,0,-63,0,37,0,0,-11,-31,0,0,0,0,0,-1,-8,0,0,0,0,0,-3,0,0,0,17,0,0,0,-10,0,0,-54,-2,0,0,0,-3,0,0,0,0,0,0,0,0,10,0,0,-18,-4,-14,0,-34,0,0,0,0,0,0,-1,0,0,0,0,0,0,20,0,2,7,0,-35,0,-38,0,0,0,0,-1,21,0,0,-2,7,0,0,44,0,-9,67,-15,0,9,0,-17,0,0,0,0,0,-1,0,0,-43,-12,0,0,0,0,0,-13,0,0,-5,0,0,0,1,0,0,0,0,-1,0,7,0,-18,-6,-2,0,0,0,0,8,-20,0,14,0,0,-26,0,35,0,0,-1,0,-27,0,-3,23,0,0,-2,0,-11,-14,0,0,0,0,26,0,0,0,0,0,-2,4,0,0,0,-2,0,0,-6,0,0,-17,0,0,0,-26,-6,-19,0,-8,-10,0,-47,0,0,0,0,0,-1,71,-19,1,0,0,0,0,0,-13,-2,0,0,0,30,0,-15,0,0,-1,0,0,-3,-14,0,0,0,-47,0,-1,-23,0,0,0,0,0,0,0,-7,0,0,0,0,-4,-20,0,0,0,0,0,-28,0,0,-38,0,0,0,0,8,0,0,0,0,0,0,-11,0,-11,0,0,0,-2,0,0,0,-22,-7,0,0,20,-15,0,0,0,-20,0,51,0,0,0,0,49,0,-16,0,3,0,8,0,27,0,-11,-2,0,0,0,0,0,0,-4,-1,-32,-1,0,0,0,-7,0,0,0,-3,0,0,0,0,0,0,0,-3,0,0,0,0,-18,60,0,0,0,0,-35,0,0,0,-43,35,-13,-1,9,0,0,0,0,0,0,-3,0,0,0,-4,0,0,28,0,0,-35,-53,-7,-1,0,0,0,14,0,0,0,-1,-4,0,0,0,-2,0,5,0,0,0,-49,4,0,-12,0,0,0,-1,0,0,-17,-3,0,0,-44,0,0,-7,0,0,0,0,-11,24,0,0,0,0,-54,-3,0,0,0,0,0,0,0,0,0,0,0,16,-5,0,0,0,0,0,-22,0,0,-2,-1,0,0,-4,0,0,-5,0,0,0,-11,0,0,0,-24,0,0,0,0,0,-19,0,0,0,0,2,0,0,-26,-3,0,0,0,-4,0,0,0,0,-11,-12,-19,-30,0,0,0,0,-21,0,0,-3,0,0,0,3,0,22,-4,-5,-1,0,0,-6,0,0,0,0,-18,0,0,0,0,0,0,0,0,-6,0,-3,-4,0,0,0,16,-4,0,0,0,0,0,0,5,6,0,-8,-1,0,0,0,0,-10,0,33,-3,0,0,-6,0,0,0,0,0,0,0,0,0,-18,-62,0,0,-28,0,0,0,0,-2,-1,0,0,27,0,0,0,1,0,-9,0,50,0,0,0,0,-39,0,0,0,-5,0,0,-6,-5,-2,-17,0,0,0,0,-5,0,-18,0,7,12,-4,0,0,0,-27,0,0,0,0,0,-14,-54,0,0,0,28,0,0,0,0,0,0,0,-10,0,-26,-2,0,-27,0,0,0,-23,0,-23,0,0,0,-62,0,50,0,0,0,0,-23,-14,8,0,0,0,-20,1,0,0,0,-21,-19,0,0,-23,-1,0,0,0,0,0,0,-15,-13,0,0,-47,4,0,0,14,0,-3,18,0,11,42,0,0,0,0,0,0,0,3,0,0,0,-6,0,6,0,0,13,0,0,-11,0,-1,-18,0,0,0,-4,0,-41,0,-4,-8,-4,-15,0,10,0,-9,0,0,-15,0,0,-1,-43,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,-16,0,-56,0,-9,0,0,0,0,-1,0,0,20,0,0,14,0,-4,-2,-10,0,-6,-5,-56,0,-5,0,3,0,0,11,0,-15,0,0,-4,0,0,0,0,0,0,0,0,0,-11,0,0,-11,0,0,0,0,0,0,0,0,25,0,-3,0,0,-3,26,0,-44,22,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-9,0,0,0,0,0,0,0,0,-4,22,0,0,0,0,5,0,0,0,0,0,0,0,0,-6,2,0,0,0,0,-32,0,0,0,0,0,-6,0,0,0,-2,0,-15,28,0,0,0,0,0,-2,-2,-1,0,0,-14,0,0,0,-16,0,-8,2,26,0,0,7,0,-3,0,0,-63,0,0,0,-5,0,0,0,0,-3,-67,0,0,0,0,-3,-16,0,-5,50,0,0,0,30,0,-12,0,0,39,-2,0,14,-4,0,26,-3,0,-3,0,0,0,-5,42,-7,0,0,0,0,0,1,4,0,-41,0,0,0,36,0,0,-12,0,43,-6,-13,0,0,0,0,0,-22,0,0,0,0,0,0,0,-2,0,-3,-2,0,0,0,-1,-33,0,0,0,39,0,0,-4,0,0,-4,0,0,0,-2,-2,-7,0,0,-15,0,34,0,0,-3,0,-7,0,-1,0,-5,0,7,-5,0,-4,0,0,0,0,24,0,0,14,34,0,0,0,-15,0,0,12,0,-28,0,2,-16,0,0,0,0,0,0,0,0,38,0,7,0,0,0,-10,63,0,-31,0,0,0,-1,-6,0,0,0,-7,0,0,-2,0,0,-6,0,15,27,0,0,-3,-6,0,-3,-21,-17,0,0,0,0,0,0,0,-5,0,-14,0,-1,0,39,0,0,0,0,0,0,-24,0,0,0,14,0,0,0,-71,-7,0,-22,-24,0,-3,0,0,0,-26,-5,-7,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-7,0,0,-21,0,0,0,0,0,-18,0,-11,0,-3,0,47,-18,-10,-1,-18,-16,0,0,0,-45,0,0,0,0,0,0,-12,0,28,4,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,-19,46,0,0,0,0,0,-13,0,0,-6,0,0,0,0,6,-10,0,0,0,-31,19,0,0,-4,0,-5,-18,0,-8,-1,-11,-22,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,45,-36,0,-4,0,0,-6,0,0,-1,-40,0,0,-9,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,24,-16,0,0,0,0,0,-5,0,0,0,0,0,0,0,-11,0,0,0,0,0,45,0,7,0,8,-8,-33,11,0,-56,0,0,0,0,29,0,0,45,17,0,-1,-1,0,9,-30,53,0,1,0,0,10,0,-4,0,0,0,0,0,-5,0,-1,-77,0,-43,5,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,4,0,73,0,-7,-21,-6,0,0,0,0,0,0,11,0,0,0,0,0,0,-11,-6,0,0,-19,25,0,-25,0,0,-20,-41,-5,0,0,0,0,0,24,0,0,0,-25,26,0,-5,-2,0,0,-31,0,0,0,0,0,0,-10,0,0,-4,0,-25,0,-8,0,0,0,0,-9,0,0,0,0,-3,6,22,0,0,0,-39,-8,0,0,0,-12,0,23,0,0,0,0,-10,0,0,0,0,0,-10,13,-14,-30,0,0,-7,0,53,-3,0,-8,-44,0,0,0,-1,0,0,0,0,0,0,0,19,0,-36,0,0,-2,-3,28,14,0,-31,0,0,0,-2,0,0,23,0,0,-13,0,0,0,0,-2,0,0,0,0,0,0,0,-1,-5,0,0,0,-32,0,0,6,0,0,0,-6,0,3,-19,-6,-4,0,0,4,0,5,0,22,0,0,0,-1,0,0,-2,0,-30,0,0,6,0,0,0,0,-3,0,0,0,9,0,-17,0,-16,0,0,-5,-9,-20,5,0,0,20,-33,0,0,-1,0,0,0,0,0,0,-3,0,-10,0,0,0,26,0,0,0,0,0,0,-13,0,52,0,0,0,-16,0,-4,18,-5,0,-12,-46,0,0,-5,0,0,0,0,0,0,-16,17,0,0,-8,0,-5,0,0,0,1,0,0,-8,0,-43,0,0,0,0,0,0,0,0,0,0,-14,-14,-1,-5,0,0,0,4,0,30,0,-3,-8,0,0,0,0,12,47,0,0,0,17,-3,24,0,0,0,-25,0,-7,-3,0,0,0,0,0,-1,0,0,0,0,-10,0,0,0,0,-10,0,0,0,0,0,0,-15,0,0,0,-44,0,0,0,0,-1,0,0,0,0,0,-5,0,0,0,0,0,-10,0,0,0,0,0,0,0,-3,0,0,0,0,-4,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,-54,0,0,0,-21,0,-3,3,0,0,0,0,-3,0,0,0,0,2,0,-10,0,0,-10,0,13,0,0,45,0,15,22,0,0,-7,0,-57,0,0,0,0,-5,0,0,-2,0,0,-25,0,0,0,0,-34,0,11,0,31,0,0,-6,-8,0,0,6,0,0,0,0,0,0,-16,-1,0,0,0,0,50,0,0,0,0,0,-5,-1,0,-3,0,0,0,-1,-4,22,0,0,0,-7,-40,-5,-16,90,0,0,-2,0,19,0,-1,0,0,0,0,34,-5,0,-18,1,-11,-27,0,0,66,-8,0,0,38,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,-6,0,0,0,0,20,6,0,0,0,-6,0,0,0,0,0,0,11,0,0,0,-14,-1,0,0,26,0,0,-12,0,7,0,0,0,0,-5,-5,0,0,0,-28,7,0,0,-14,0,0,0,0,0,0,2,0,0,6,-8,0,-17,12,0,-3,0,0,0,-3,0,-5,0,0,0,0,0,-1,0,18,0,0,0,0,0,0,1,-3,0,0,0,0,0,0,0,0,-1,0,0,0,4,0,0,-38,0,14,-2,0,0,0,22,0,0,5,1,0,0,0,0,0,0,0,-4,-15,0,0,0,0,0,-1,1,0,-1,-2,0,0,0,0,0,0,-2,0,-20,0,-1,0,0,0,0,-1,-16,4,0,-8,-6,0,0,32,-7,0,0,14,0,0,0,21,0,0,0,0,5,-1,-10,0,0,61,0,-17,-1,0,0,0,0,0,0,7,-3,0,-26,0,0,0,-32,-2,8,0,0,-9,0,-21,0,0,-47,0,0,-2,10,0,0,0,0,-10,0,0,0,0,-1,0,0,0,-5,0,-1,0,0,0,0,0,-10,0,-19,-23,0,-6,27,0,0,0,-2,-2,0,-15,-11,-24,0,0,0,0,0,0,-48,34,0,0,19,18,0,0,-2,-16,-20,1,-18,0,0,0,0,0,0,-22,0,0,0,0,0,0,0,0,0,-10,0,0,9,0,-28,-4,0,0,0,0,24,0,-4,0,3,0,-4,0,-2,0,0,-13,0,0,0,0,12,0,0,0,-1,2,0,0,0,-6,0,-3,0,5,0,0,0,0,0,-14,0,62,0,0,0,0,-25,0,-1,0,0,0,-8,0,0,-6,0,-2,0,0,0,0,0,-15,0,-4,0,0,0,0,-33,0,-7,-3,-14,-35,0,0,-4,0,0,0,0,2,0,0,0,5,33,0,0,0,0,0,59,0,-20,0,8,-2,0,0,5,-8,0,0,-3,0,5,0,0,0,0,0,0,14,30,-1,-7,0,-5,0,-6,0,-17,0,0,0,0,-3,0,0,0,34,0,0,0,-6,0,0,-1,0,0,0,-6,0,0,22,0,-5,18,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,9,0,0,0,0,0,-5,0,0,0,0,0,0,-3,13,0,3,0,0,-4,0,0,0,12,-12,0,0,-8,-3,0,0,0,0,0,0,-1,0,0,0,-66,-5,0,0,0,0,0,-1,0,-28,0,-68,-6,0,0,0,0,0,-4,-8,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-19,0,-7,-12,-3,0,-4,0,0,12,0,0,-4,-62,-2,-29,0,0,0,0,0,-5,0,0,0,0,-37,0,0,-9,-1,0,-6,-3,0,-10,-10,8,-17,0,-25,-7,0,0,0,51,0,0,-6,0,0,0,-14,-7,0,0,23,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,12,0,0,0,0,0,0,0,-1,0,0,0,51,0,0,5,0,-7,0,0,0,-17,0,-2,0,0,0,0,0,-28,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-23,0,0,0,0,47,0,0,0,0,0,0,0,0,0,58,-2,-16,0,0,0,0,0,-8,0,0,0,0,-5,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,33,-18,0,-8,-8,31,0,-8,0,0,-2,0,0,0,0,-1,0,0,0,0,0,-3,-2,0,6,0,0,0,3,-5,4,0,-2,0,0,0,-18,0,-6,0,0,0,0,0,0,-3,62,0,0,0,-5,0,0,0,-2,14,40,0,0,0,0,-26,0,-3,0,0,0,0,0,-6,0,0,0,-10,0,0,0,-11,0,-14,0,0,-3,0,0,-5,-3,0,10,3,-1,1,0,0,0,0,15,-10,-8,-12,0,-23,18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,31,0,0,0,-11,0,-7,0,0,0,6,0,-6,-43,0,0,-42,0,0,0,0,0,0,-33,0,4,35,0,-2,0,0,0,0,-14,0,0,35,0,0,0,0,0,0,-2,0,0,0,0,20,0,0,0,0,0,8,0,0,-6,0,0,0,0,0,0,0,0,0,0,-5,-56,0,-8,0,1,0,-35,-18,-8,0,0,0,0,0,-1,-37,-2,6,-15,0,-15,0,0,-25,0,0,-6,-32,-7,20,0,0,0,0,0,0,0,0,0,0,0,-40,-5,0,-5,0,16,0,0,0,29,-24,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-4,0,0,0,0,0,-12,0,-5,-10,0,-2,0,0,-38,-10,-7,0,0,0,0,-41,0,0,-32,0,0,0,-27,-2,0,0,0,0,0,0,0,0,0,-40,0,0,-16,0,0,0,0,40,-6,26,0,0,0,0,-1,0,0,-6,0,0,0,0,-46,0,0,-11,0,0,24,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,-15,0,14,-38,0,0,0,0,0,0,-1,-10,0,0,0,0,0,0,0,0,0,0,-32,-28,0,16,-2,0,0,-15,-5,-4,0,0,0,0,-18,13,-20,0,0,-50,0,-1,5,0,0,0,0,0,44,0,-1,0,-21,0,0,0,-8,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,-18,16,-6,0,0,-4,0,0,-4,0,0,-2,0,10,0,0,0,0,0,0,-7,-3,-2,0,0,1,-5,2,-5,0,3,0,-2,0,0,-3,-16,0,0,33,-9,0,-8,-64,-1,-1,-1,0,0,0,0,0,7,0,0,0,0,0,-10,-4,0,0,0,0,0,0,-1,58,0,35,0,0,11,-38,22,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,7,5,0,-1,-13,10,0,0,0,-5,0,0,0,0,0,-2,0,-2,0,0,-4,0,-11,0,0,24,0,0,0,-11,0,-8,0,0,0,0,0,0,0,-8,0,0,-6,0,0,0,-53,-17,0,0,-6,-22,0,41,0,0,-3,0,0,0,-3,0,0,0,-6,-2,0,-4,0,-15,0,-9,0,-17,0,20,0,0,-7,-9,0,0,0,-9,0,47,0,0,-26,5,0,9,-64,0,0,-2,0,0,0,0,-11,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,91,0,0,0,0,0,0,-1,0,0,0,0,0,-5,0,0,0,0,0,-2,0,0,-6,0,0,0,0,0,0,0,-10,0,-3,-2,0,-5,0,0,8,0,0,0,-4,-11,0,-3,-10,0,0,37,1,0,-1,0,0,0,-9,0,0,0,0,0,-27,0,0,-2,0,28,0,-4,0,0,0,0,-10,0,-5,-52,-6,0,-1,0,0,0,-10,0,0,0,0,0,0,11,14,0,0,34,-4,0,0,24,0,0,0,0,-14,-16,0,-22,0,21,0,0,0,0,0,-4,-5,0,-5,0,0,-16,0,0,0,-26,0,0,-23,0,0,0,0,0,32,41,-1,0,0,124,0,0,-3,-8,0,0,0,0,-15,0,0,-5,-6,-1,0,0,-5,0,0,0,0,0,-22,0,-22,0,0,0,-1,-12,0,0,0,-19,0,0,-4,0,0,0,115,-17,0,0,-1,-9,0,0,0,-13,15,0,0,0,0,-40,-14,-12,-68,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,31,0,0,-19,0,0,-3,0,45,0,0,0,0,0,21,-4,0,-4,0,0,0,0,0,0,-2,-23,-9,0,-2,-16,-4,0,0,0,0,0,-25,0,0,0,-17,0,0,0,-29,0,0,0,0,0,0,0,0,0,-30,0,0,0,0,0,0,-8,0,0,0,-15,-6,0,0,0,0,0,0,6,0,0,0,-2,0,0,-65,0,0,0,0,0,0,-3,-1,-22,-54,11,0,0,0,-48,0,0,-4,0,0,0,-5,0,0,0,0,5,-9,1,0,0,-31,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,-33,-4,0,0,0,0,20,0,0,-67,0,0,34,0,0,0,0,0,0,0,0,0,0,0,-1,-6,-2,2,0,0,0,-7,0,0,-9,0,0,0,0,0,0,0,0,0,-13,0,0,0,31,0,0,0,0,0,0,0,40,0,0,0,0,0,76,1,0,0,0,-6,-1,0,0,0,0,-16,0,-3,0,0,-1,0,0,0,-12,0,0,-2,-8,-15,-28,0,0,0,0,32,0,0,0,0,0,0,0,-5,0,0,0,0,-13,-24,-18,0,0,0,0,0,-27,-6,0,0,0,0,0,0,0,0,0,0,0,0,-21,-9,0,0,0,-11,0,-24,-22,0,-10,0,0,-20,0,0,0,-63,0,0,-19,0,0,0,0,21,0,0,0,-14,0,0,-5,0,0,0,-16,0,0,0,-13,0,-62,9,11,-4,-7,0,-3,0,0,-2,0,0,0,-1,0,0,2,-2,0,-5,0,0,-4,0,-45,-50,0,-45,0,0,0,33,13,1,0,0,-8,0,0,16,0,0,0,0,-13,0,-56,0,0,0,-49,-11,0,-7,0,0,0,-8,0,-2,0,0,5,-49,0,0,0,0,-1,0,-17,0,0,-23,9,0,-1,0,-3,-1,0,0,0,-54,-14,0,0,0,0,0,-9,2,0,3,0,0,0,-12,4,0,0,0,0,21,27,0,0,0,16,0,-3,0,0,0,-14,0,0,-23,-5,0,0,-7,0,0,0,-17,0,12,0,-40,-1,-30,17,2,-21,0,9,0,0,0,0,0,-12,0,0,-4,0,0,0,-1,0,-18,-14,-12,0,0,0,0,0,69,-5,0,0,0,-24,0,0,0,-3,0,0,0,-4,0,-14,0,0,-9,-2,-17,64,0,0,0,0,0,0,0,-7,0,-2,0,0,0,0,0,-47,0,-71,26,-3,0,0,0,-2,-48,0,-14,0,0,0,-3,-9,0,-13,-12,0,0,0,0,0,-9,0,0,-50,-5,0,0,0,28,0,0,0,-35,0,-10,-8,0,0,-18,0,0,-27,4,0,0,-5,0,0,0,0,0,-3,17,-1,11,5,0,0,64,-5,-22,-12,28,0,12,0,0,-3,0,0,-6,0,-7,0,0,0,0,0,-6,0,-64,0,-16,0,0,10,0,0,0,0,-6,-5,-14,0,-54,3,0,-3,0,0,0,0,-34,-19,0,0,0,34,0,0,0,-7,-34,0,0,31,0,-6,0,-26,0,0,0,-2,0,0,54,0,-20,34,0,24,0,0,19,0,-8,0,0,0,0,-5,0,0,0,0,0,0,-7,0,0,0,0,0,0,10,31,0,-13,0,0,0,0,0,50,11,0,16,-1,-6,0,0,0,0,0,0,-9,0,0,0,41,0,90,0,-32,0,-12,0,-29,-43,0,13,0,-16,-8,0,-6,0,-33,3,0,-9,0,0,-6,9,0,0,14,17,-15,-4,45,6,-13,34,0,-15,0,8,-14,0,37,-19,0,0,0,0,0,0,0,0,0,0,5,2,0,0,0,0,0,-5,-6,0,0,0,0,0,0,0,0,-3,33,0,0,0,0,-29,-20,-25,-6,4,0,0,-18,0,0,0,-12,-17,0,-2,-6,31,0,0,0,-2,0,0,-27,0,0,0,0,0,0,0,41,0,0,0,0,0,0,47,0,0,0,0,13,14,-6,0,0,-2,18,0,0,0,0,0,0,0,0,0,-7,0,0,0,-4,-2,0,0,0,-9,-2,-6,-3,0,-9,-4,0,0,0,-21,0,0,-1,0,0,-16,0,0,0,9,-2,0,-16,0,0,0,0,0,-5,0,0,-3,0,0,-5,-1,27,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-15,-1,-9,0,-2,0,0,0,0,0,-10,0,-2,0,-1,0,0,-19,0,-6,0,3,0,-9,0,-1,0,-26,-16,-21,0,0,0,0,0,56,0,-2,-17,-17,7,0,0,6,0,0,0,0,0,0,0,-3,-5,-16,0,35,0,-8,0,-19,0,0,-5,0,0,0,-54,-60,0,19,-4,-6,0,9,0,8,0,0,25,0,11,0,-36,0,0,0,0,0,0,-4,0,0,0,7,-9,0,-3,19,-3,-13,0,0,-12,0,66,0,0,-2,0,-11,0,-10,0,-20,0,0,-3,0,0,0,0,0,-13,0,0,-3,-4,0,0,0,0,0,0,-12,0,-7,0,-6,0,-62,0,0,0,18,34,0,0,-3,0,0,-22,-44,-5,-2,0,-9,-18,0,-5,0,0,0,0,75,0,-17,0,0,0,0,-27,-2,-67,11,-9,65,0,0,0,-14,-4,0,0,-9,0,3,0,-17,0,0,0,-7,5,0,0,0,-20,0,-9,0,0,-9,0,0,-14,-3,0,-2,0,0,0,-1,0,-1,0,0,-4,0,0,11,0,0,0,0,0,-16,0,0,6,0,0,0,0,0,0,0,0,0,0,-5,-6,0,39,0,-10,0,28,-2,3,0,0,-10,0,0,0,0,0,0,0,-32,0,0,0,2,-5,0,0,0,0,-2,0,0,0,0,0,0,17,0,-21,0,0,0,0,-13,0,0,0,38,0,-6,0,0,0,0,0,0,5,0,0,0,0,0,-9,0,0,0,-12,0,0,-32,-3,-1,0,0,0,0,2,0,-4,0,-13,0,0,-13,0,0,0,-4,0,0,0,0,0,0,-32,0,0,0,0,0,0,0,0,-3,17,0,0,0,0,0,2,0,0,0,-16,-9,-25,-1,0,0,-9,-28,0,21,-10,-30,-6,0,0,4,-17,0,0,0,0,0,0,-2,29,-1,0,0,-62,0,0,0,-7,0,-18,0,18,-50,14,0,0,0,0,0,-3,0,0,0,-6,0,0,0,2,0,0,-5,0,0,-24,0,5,0,-14,47,0,0,-2,-18,-24,0,17,0,0,0,0,0,-3,-1,6,0,0,0,0,-20,-6,0,0,0,0,0,0,0,0,0,0,-57,-3,0,5,4,0,90,0,0,-32,0,0,-12,0,0,-20,0,0,0,0,-13,0,0,-2,0,0,0,-15,0,0,42,-3,22,0,0,0,0,0,0,-42,0,11,0,0,0,44,1,0,-15,0,0,0,0,-2,78,-5,0,-2,-1,-59,-8,-2,0,0,-16,0,0,0,0,0,5,-6,0,44,0,8,-2,0,0,0,0,2,0,-13,0,-6,0,0,0,0,0,-23,0,19,-41,0,0,0,0,0,0,0,0,0,-3,0,0,-5,0,0,0,-1,0,0,0,0,15,-17,3,0,0,-13,7,-6,20,-63,0,0,0,0,-3,0,0,0,0,20,0,0,0,0,0,-32,0,2,-2,0,0,-4,0,0,0,0,0,0,0,-13,0,0,0,0,-16,-1,-1,-2,-6,0,0,0,0,4,-19,0,0,0,0,0,0,2,14,-26,30,0,-4,19,0,-8,0,0,0,3,0,0,0,0,0,0,0,6,13,0,0,0,-29,0,0,27,0,0,0,0,7,-10,0,0,0,0,0,0,-7,-47,0,-17,0,39,0,0,0,0,0,5,0,0,0,0,5,0,0,0,0,0,0,-15,0,1,-51,0,0,-2,0,0,0,-1,50,31,0,-21,0,0,0,0,0,0,0,-34,16,-3,19,0,0,-52,5,-2,0,0,-2,0,0,8,-11,0,0,0,0,0,0,0,0,0,8,0,-10,0,0,-7,-1,0,0,0,-3,0,0,0,0,0,0,-13,-7,0,0,0,2,0,0,-16,0,-12,0,0,0,-10,0,-11,0,0,0,14,0,0,0,-35,0,0,0,0,0,-11,0,0,0,0,0,0,0,-20,0,0,0,0,0,0,0,0,0,-1,0,0,-7,0,0,0,0,-21,0,0,0,0,0,0,-7,0,-10,0,0,-56,12,0,-54,54,-5,0,0,0,0,0,0,0,-3,0,0,0,4,14,0,0,0,0,-6,0,0,-15,0,0,0,0,-4,-2,-3,0,0,14,-52,0,0,0,0,-4,0,0,0,0,0,0,0,0,37,-4,0,0,0,0,12,-13,0,0,-11,-8,0,0,-2,0,-9,0,0,-31,0,-4,0,-5,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-17,0,0,0,0,-5,0,0,0,0,0,0,0,-7,0,0,0,0,-9,17,0,0,0,0,0,0,0,-3,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,-12,-11,-30,0,0,-1,0,-8,22,0,0,0,0,0,0,0,0,-3,0,0,0,0,-3,0,0,0,-7,0,0,-3,0,0,5,0,0,-1,-1,-1,-24,0,0,-14,-30,0,-20,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,-54,-3,-9,24,0,0,1,0,0,0,-1,19,0,-11,0,0,0,0,0,0,0,3,-40,0,0,0,-23,0,0,0,0,-2,-14,-24,0,-16,0,0,-1,0,22,0,0,0,-1,-22,-38,0,0,54,0,0,-17,-5,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,0,-6,0,0,56,0,0,0,-14,0,0,-21,0,0,0,-6,0,0,0,0,0,0,1,0,0,0,-2,12,0,0,0,-13,0,18,0,0,0,0,0,0,13,-1,0,0,0,-7,0,-9,-7,-4,0,0,0,-2,25,-23,0,0,-1,0,0,0,8,-13,-24,0,0,-5,0,-4,0,0,-68,0,0,0,0,0,-11,-1,0,0,0,0,0,0,-18,0,-6,-30,0,0,0,-41,28,43,0,-4,-2,-10,0,0,0,0,0,0,0,0,0,-12,39,-30,0,0,0,-22,-4,0,0,3,0,0,2,0,0,0,0,0,0,31,0,0,-8,0,1,0,0,-22,0,46,-7,31,-47,0,-3,0,0,0,0,0,-12,0,2,-23,-1,-3,0,46,3,-36,0,0,0,0,0,0,0,0,-6,11,-6,-29,11,20,0,0,0,0,0,0,29,0,-44,0,0,0,0,10,-26,0,0,-20,0,0,0,0,-6,0,-57,0,0,0,-10,0,0,-5,2,0,39,0,0,0,0,0,-8,0,0,0,0,0,0,0,17,-12,0,0,0,-30,0,5,0,-16,-6,0,0,-12,0,0,0,0,0,0,0,0,0,0,-6,-12,0,0,0,0,0,0,33,-4,0,-10,0,-3,0,-16,0,0,0,-4,0,0,20,-4,0,6,0,0,-5,15,0,-5,-49,0,0,0,0,0,0,0,0,0,15,0,-4,0,-41,0,0,0,0,0,0,0,0,17,0,0,0,0,0,0,-18,-16,0,0,0,0,0,0,0,0,0,0,30,0,-16,0,0,0,0,48,0,34,-12,0,0,0,0,0,0,0,-1,0,-7,26,0,0,-5,-24,0,0,26,0,20,-3,8,-22,0,0,0,-17,0,0,-2,0,0,47,17,0,0,0,0,0,-1,0,0,-15,0,0,0,-15,30,-4,0,0,0,0,0,4,0,0,0,-17,0,-10,0,0,-14,0,0,0,0,-11,-18,-9,0,0,-1,0,0,0,-3,-1,0,-56,53,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,15,24,-2,-10,0,0,13,-1,0,0,0,0,21,-2,0,0,-8,0,-18,-26,0,-41,-37,0,-6,-23,-8,0,0,0,0,0,-5,0,0,-8,0,22,0,0,0,0,0,-6,0,0,0,0,15,0,-3,-6,0,0,13,0,0,-40,-47,0,0,26,-10,-7,27,0,0,0,0,-3,0,-15,27,0,0,-2,-38,0,0,-20,0,0,0,0,-2,0,0,0,0,-20,0,-23,-2,-41,0,0,0,0,3,-9,0,0,0,0,40,0,-4,0,-1,0,15,19,0,0,0,-2,0,0,-12,-5,0,0,-15,-6,-21,0,0,0,0,9,-24,0,0,0,0,0,0,0,0,-40,-16,0,0,0,0,0,0,-11,-21,0,0,0,0,100,0,0,0,0,0,0,0,0,0,-14,0,0,0,6,-18,26,0,0,-30,0,0,-45,0,0,0,0,0,0,-41,-11,0,-8,0,0,0,0,61,-16,0,-69,-8,0,10,0,9,-1,0,0,-11,-53,0,0,0,-5,0,-1,0,0,0,0,6,0,6,-2,-39,0,0,0,0,45,4,-3,0,0,-10,0,0,0,0,-29,0,0,0,0,0,0,0,0,2,0,-7,-5,2,-1,0,0,-3,0,-8,0,0,0,0,0,0,0,0,0,0,-8,16,0,-11,2,0,-6,0,-18,0,0,11,0,0,0,-7,-16,0,0,44,0,0,0,36,0,-1,0,9,0,0,-10,-14,0,-1,-2,0,0,-13,-7,0,0,0,0,46,0,0,1,0,0,0,0,0,0,0,-2,0,-17,-19,0,34,0,-16,0,-5,0,0,0,0,-3,0,0,-26,0,-4,0,0,36,0,0,-13,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,-37,-13,28,0,0,7,0,0,29,12,-5,0,0,0,0,0,0,-33,-2,0,0,-42,9,-7,-60,0,24,0,0,-60,0,-45,-17,0,0,0,-12,0,17,18,0,0,0,0,0,-1,0,0,0,0,0,0,-4,0,-8,0,0,0,0,0,0,0,0,-7,0,0,15,0,0,0,-8,-13,0,0,-15,-28,0,33,0,17,0,0,0,2,-13,0,0,0,46,0,0,0,0,-7,0,0,0,-8,0,0,0,0,0,0,0,-8,-5,0,0,-2,-4,0,0,0,0,0,0,0,0,0,0,0,0,-5,-25,0,26,0,0,-4,0,2,-32,21,0,0,-1,-14,0,-1,-3,0,5,-20,0,-4,0,0,0,-3,0,-8,-13,0,-1,0,0,0,0,0,0,-1,0,-8,0,0,0,0,0,0,0,0,0,0,0,-3,-31,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,-10,-1,-20,-2,10,-1,0,-7,0,0,-41,3,0,0,-10,0,0,-40,-1,-14,2,0,3,0,0,4,0,-15,0,0,0,0,0,0,-9,0,-8,-6,0,0,0,5,0,0,-7,0,0,0,0,-25,-1,0,1,0,30,-2,0,-34,0,0,0,0,65,0,0,0,0,0,0,-7,0,0,-3,-17,0,0,0,0,-29,54,0,0,11,0,0,0,20,0,0,0,39,0,0,0,0,-1,0,0,0,15,0,0,-2,1,0,0,46,-9,0,-4,0,0,0,0,-35,-13,0,-20,-3,0,-4,0,0,0,33,-15,0,0,0,-2,0,-14,0,-2,0,0,-5,0,-4,1,-19,0,6,-6,0,0,-6,-25,0,-16,0,23,0,0,0,0,0,0,10,0,0,0,0,-4,0,0,0,0,-19,12,0,-3,0,17,0,0,0,0,-18,0,-2,0,0,-11,-4,0,0,0,-4,0,0,15,0,0,0,0,44,0,-27,-7,0,23,-12,0,0,-4,-24,0,-1,-13,0,0,-13,0,0,0,0,0,0,-1,0,0,0,-6,0,0,0,0,0,23,-1,-3,-2,0,-6,0,24,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,3,0,0,-3,0,0,-5,-21,0,-1,6,0,0,0,0,28,-18,1,0,-9,0,0,0,0,0,0,0,0,0,-34,0,0,0,-13,10,0,0,-4,0,0,0,23,0,-8,-17,0,-1,0,0,-45,-51,0,0,-17,0,-1,0,0,0,-3,0,0,-24,0,0,-9,0,-5,-19,0,0,-49,0,16,-22,-9,0,0,0,-10,-9,0,0,0,0,27,0,0,0,0,0,0,0,0,0,3,-1,0,0,-13,-6,-2,0,0,-4,5,-45,16,2,0,0,0,0,0,0,0,-1,0,-4,0,0,-5,-6,0,0,-2,5,-35,35,11,-36,-15,0,0,0,-14,0,-32,0,0,0,24,0,0,0,0,29,0,0,0,0,0,-8,0,0,0,-8,0,0,-1,0,0,0,2,0,0,18,0,-8,0,0,0,0,0,0,-8,0,0,-7,0,3,0,12,0,0,-3,0,0,0,14,0,-1,0,0,42,0,0,-7,-18,-8,-14,-12,-1,36,0,0,0,-2,-3,-3,0,-2,0,0,0,0,0,0,0,0,-17,0,0,-13,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,-22,0,0,-10,0,0,0,-16,0,1,0,0,-48,0,22,0,-11,0,0,0,-55,60,0,-39,29,0,0,0,0,0,0,0,0,1,0,0,-10,0,35,0,0,0,0,0,0,0,17,0,0,0,-11,0,-5,8,-12,0,-1,0,0,0,0,-5,0,-4,-46,0,0,0,0,0,0,-5,0,20,0,0,-74,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,23,0,-26,-18,0,0,0,-1,0,0,0,-35,0,0,0,-17,-24,0,0,0,-3,-4,0,0,2,-2,49,0,37,14,0,-12,0,0,0,-10,0,-68,0,-1,0,0,0,0,0,-15,-20,0,0,0,0,0,29,-1,0,0,-11,0,0,-11,-6,-8,-3,0,0,0,0,0,-20,-19,0,0,-3,-4,0,-26,0,-11,0,0,0,0,0,0,7,0,4,0,-46,11,-2,0,17,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,43,0,0,0,0,0,-4,0,-22,0,0,0,0,0,0,0,0,0,18,0,0,42,0,0,0,-3,0,-16,51,0,0,0,0,0,0,0,-23,0,16,50,0,0,0,0,0,0,0,0,-79,0,0,0,0,0,-4,0,-4,-1,-11,0,0,0,0,0,0,-36,-21,0,0,0,0,0,0,-4,-4,-2,0,-3,0,0,-1,0,0,-1,0,0,0,-6,0,0,6,-3,0,-1,-14,0,0,-35,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,-5,0,0,0,-3,-30,0,0,0,0,0,-10,-1,-1,0,-1,29,0,0,0,-5,-47,7,0,-20,0,0,0,-4,0,-13,0,0,-4,0,0,30,0,0,-2,0,0,0,15,0,0,0,0,0,0,0,0,0,0,0,0,0,-18,-16,0,0,0,0,0,0,0,0,0,0,12,0,0,0,3,0,0,0,0,0,0,8,0,4,0,62,0,0,0,-5,-2,0,0,-2,26,0,0,-30,0,-17,0,0,-4,0,0,0,0,0,-3,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,17,0,0,0,0,3,34,-31,0,0,-8,0,-2,0,0,0,0,0,-11,-27,0,0,-34,0,0,0,19,-6,0,0,0,0,0,3,0,-3,0,0,-3,-12,0,0,0,0,0,-5,0,-5,0,-8,-15,0,0,0,0,-10,0,0,24,0,0,0,0,0,0,0,0,0,0,0,14,0,0,0,0,0,0,0,47,4,-20,-8,0,-17,0,0,-2,-3,0,0,0,0,-6,9,-3,-9,0,-20,0,0,4,0,0,0,0,0,0,0,-7,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,2,0,-56,0,0,0,0,0,0,0,7,8,0,0,0,-4,0,-25,6,0,-3,0,0,0,0,0,0,0,0,0,0,0,9,14,0,0,14,-2,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-40,0,0,0,0,0,0,0,0,26,0,0,0,0,-13,0,0,0,0,17,0,0,0,0,55,8,5,-4,0,0,0,0,6,0,0,17,0,-16,13,0,0,0,-11,0,23,-3,-10,0,0,0,11,0,7,0,0,0,-14,-5,-17,-4,-5,0,-69,11,0,0,-12,0,0,0,14,-13,0,0,0,0,0,0,-6,-26,66,4,-2,0,-11,38,0,-3,2,0,0,-10,0,0,0,0,0,-1,0,0,0,0,0,0,0,2,0,0,0,0,0,13,6,0,-1,-2,0,0,0,0,0,0,0,-54,3,-1,0,0,0,0,0,41,-25,13,-7,0,0,0,0,0,0,0,-25,0,-5,0,-25,0,0,0,24,0,0,-12,8,0,0,0,-10,0,0,35,-2,0,-1,-4,0,0,0,0,0,0,0,0,44,-4,1,0,-9,0,0,0,0,-7,0,0,0,0,10,-3,-2,0,0,-1,-1,-37,0,0,-6,-19,0,30,0,0,0,0,-1,9,22,33,-16,0,0,-3,-8,0,0,0,-3,-6,0,0,-10,0,0,-5,8,0,-3,0,-4,0,-5,0,-3,11,0,-6,16,-1,-5,0,0,0,0,0,14,0,0,-2,0,0,11,0,-6,0,33,0,0,-3,0,0,-2,0,-35,0,0,0,-4,0,0,0,0,0,25,0,19,31,0,0,0,-7,14,0,0,-9,-16,-57,0,0,-12,0,-4,0,0,0,0,0,0,0,0,0,0,-7,-51,-12,0,0,0,6,0,0,28,0,0,0,0,0,0,-20,0,0,0,22,-29,2,-18,0,-3,0,0,-21,0,0,0,0,3,0,0,0,0,0,-16,0,0,-3,0,0,0,0,0,0,0,-12,0,12,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,19,-10,0,0,0,-15,20,28,0,0,21,0,0,16,-8,-12,-22,-6,-10,11,-4,0,0,0,0,0,0,0,-7,0,0,0,6,0,0,0,0,0,-5,0,0,-2,16,0,0,-2,0,0,0,-12,29,0,6,0,0,-15,-10,0,0,-38,0,0,10,0,-14,0,-1,0,21,-20,-43,0,0,0,0,0,0,0,-7,0,10,0,0,0,-3,0,0,0,68,0,0,-31,0,0,0,0,47,0,0,-14,-4,0,0,0,-36,-13,0,0,0,-66,0,0,0,-1,0,-13,-9,-12,-14,0,0,-22,0,-10,0,59,0,-2,0,0,33,0,0,-34,-2,0,8,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-3,-4,0,0,0,32,-5,0,0,0,0,0,0,0,22,0,0,0,0,0,0,0,-11,-8,0,0,0,0,10,0,0,-2,80,-3,0,0,0,0,-6,0,52,-2,-1,0,0,-5,-5,0,-30,0,0,27,0,-53,0,0,-6,0,-14,0,0,1,0,0,0,-39,-12,0,0,0,0,-3,0,0,0,0,0,0,-10,-11,0,0,0,0,0,0,0,0,0,0,-1,0,-5,0,0,-2,0,0,-25,-9,0,0,0,13,0,0,0,-5,0,0,-8,-7,-3,0,-36,0,1,107,0,0,0,0,-20,0,0,0,-12,0,0,0,-52,0,-27,0,0,0,0,-6,-18,31,0,0,-20,0,11,0,0,-13,0,-6,0,-25,0,0,-14,-16,0,0,0,7,0,0,0,0,-28,0,17,0,-2,0,0,0,0,0,0,0,0,0,0,2,0,7,0,-56,0,0,0,0,0,5,0,-2,-4,0,-4,0,-40,0,0,-11,0,-14,0,21,-25,0,0,0,0,0,0,0,-39,-8,0,0,0,0,-24,-7,-19,-34,-11,-41,-16,0,0,0,0,-13,0,0,0,0,0,-27,-3,0,0,-6,-19,0,0,0,1,-8,-14,0,0,-3,23,0,0,0,0,0,0,-2,-6,0,-4,12,0,8,0,0,10,0,0,0,0,0,0,0,0,-44,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,1,0,-5,-35,0,0,0,0,-1,0,0,0,31,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-22,0,-32,0,0,0,0,-14,0,0,0,-5,0,0,0,0,-1,7,0,0,0,-11,0,40,0,0,0,-25,0,0,12,0,-24,0,0,0,0,20,4,0,0,0,0,-6,0,-16,0,0,0,-4,-4,0,0,9,0,0,5,0,0,35,0,0,0,0,0,0,0,0,0,-72,0,-2,-53,0,0,0,0,0,0,-6,30,0,0,0,0,-17,0,-5,-16,0,-10,-2,0,-70,0,0,3,0,1,0,0,0,0,0,0,0,0,0,10,-10,0,-1,0,35,0,-6,-2,-6,0,0,0,0,-2,0,-20,32,0,0,-1,0,0,0,-27,0,0,0,0,-1,0,0,0,0,0,0,0,0,-38,0,-1,0,0,-30,14,0,3,-45,0,-6,0,0,0,-1,0,0,-16,-5,-1,0,0,0,0,0,0,0,0,0,0,0,-15,0,7,-56,0,0,0,-29,0,0,-28,0,6,0,2,3,0,0,0,0,-7,0,-4,0,-10,0,0,0,0,-4,0,0,-18,0,-32,0,0,-30,0,0,0,0,0,-7,0,0,-10,19,-4,0,0,0,0,-7,0,8,2,0,0,0,0,0,0,0,0,0,0,-17,-14,0,0,0,0,0,-18,0,0,0,0,17,0,0,0,-15,0,0,-26,0,-8,0,6,0,-15,0,0,0,0,0,0,0,0,-28,0,0,0,0,-38,0,0,-2,0,-13,0,0,-18,-9,0,0,-25,-14,-7,0,0,-28,-28,0,0,0,0,0,0,0,0,-13,0,-19,0,0,0,0,0,-3,0,0,0,0,-21,0,0,0,33,0,-15,0,0,0,0,-32,0,-3,-1,0,0,-5,0,22,0,33,0,-31,-1,0,0,-19,0,0,0,17,0,-36,0,0,0,0,0,0,-6,0,0,-7,-62,-19,0,-67,0,-15,0,0,0,0,-6,0,-21,55,-4,-4,0,0,33,0,0,0,0,0,0,-66,0,0,0,0,0,0,0,-5,-19,0,0,0,13,-1,0,0,0,64,0,0,37,0,0,-1,0,0,8,0,10,-4,5,0,0,0,-8,0,0,0,0,0,-3,0,0,-4,-23,0,0,0,0,-10,0,-4,0,-6,0,-4,0,0,0,0,0,0,-2,0,0,-22,0,0,-3,0,0,0,0,0,29,0,0,0,0,0,23,0,0,0,0,0,-6,0,0,7,0,-49,0,0,0,0,0,0,-16,0,0,35,0,0,8,0,-2,0,0,48,0,0,-14,-5,0,0,-5,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-3,-2,0,-10,-16,0,0,0,-5,0,1,0,4,0,0,0,36,0,0,0,0,-20,0,0,0,0,0,0,0,0,0,-6,0,0,6,0,0,-4,0,0,23,4,0,0,0,0,0,37,-9,-6,-17,0,22,-27,-1,0,49,-16,0,0,0,0,0,0,0,-50,0,0,-8,0,0,0,24,-2,0,0,0,0,-4,0,0,0,-3,-45,0,-2,-14,0,0,0,4,0,0,0,2,0,0,0,0,0,0,8,0,0,0,0,0,0,0,0,-6,-10,0,0,0,0,-13,0,-14,0,0,-4,0,0,0,0,-3,-15,-2,0,0,0,0,-1,0,0,0,-9,-3,-17,0,-2,-29,0,-42,0,0,-2,-4,0,0,0,0,0,0,-3,-7,0,93,0,-8,0,0,0,0,53,-3,0,0,0,0,0,-1,0,0,-7,-5,1,-2,0,24,0,-3,0,0,0,-12,0,-3,-45,-17,0,0,0,-6,0,0,0,0,-3,-4,-4,0,-11,0,-41,24,0,30,0,0,0,0,-3,0,0,0,0,0,0,-17,-5,0,0,0,0,-26,-5,-64,0,0,0,-34,0,0,0,-13,-3,0,0,-9,-13,38,0,1,22,0,0,0,11,0,0,0,0,-11,0,-46,0,0,0,0,-8,-1,0,0,0,0,0,0,0,0,0,-17,-6,0,0,-5,0,0,0,0,0,0,0,0,0,0,-30,0,9,0,0,0,0,0,0,0,-13,0,-11,0,0,0,-48,0,0,-9,-7,0,0,-20,0,0,-14,0,0,0,-56,0,0,0,0,-1,0,0,-11,0,0,0,0,0,0,0,0,0,-10,-47,0,0,0,0,0,0,0,4,-9,0,0,-10,0,0,-40,-6,45,0,0,19,0,13,12,0,-3,-7,44,0,0,0,-70,0,0,0,0,0,0,0,0,0,0,-7,-1,-13,-1,0,0,0,0,0,0,0,0,-11,0,0,-30,7,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,-15,0,34,-14,0,0,0,0,0,0,0,0,0,0,-10,-7,0,-29,-16,0,0,-1,-12,-3,0,0,0,0,0,0,-6,0,-7,-35,0,0,0,-2,0,-9,0,8,-2,0,0,0,0,0,-17,0,0,0,0,0,0,0,-6,-13,-37,0,0,0,-10,-9,0,20,0,0,75,0,0,0,-1,-7,-29,24,0,-3,0,0,0,0,0,0,0,0,-22,0,0,32,0,-9,0,0,0,0,-4,0,0,15,-31,-7,0,-2,-2,0,0,0,0,0,0,0,-18,-16,0,-28,0,0,0,0,-6,-1,0,5,0,-8,0,0,-14,-3,0,0,0,-2,0,0,0,33,0,0,-6,0,-28,1,0,0,0,0,-21,0,0,0,0,0,-12,-21,0,-11,0,0,0,-24,0,-1,0,0,0,0,-12,-48,0,-1,-23,-13,-1,0,-1,-11,-28,0,1,0,-28,0,-7,-21,-9,0,-3,0,0,-3,0,0,0,0,22,-22,0,0,0,-3,-1,0,0,0,-1,0,0,0,-13,-21,-45,0,0,-3,0,0,0,0,-22,0,-2,24,0,-92,0,0,0,0,8,0,0,0,0,25,0,2,0,0,21,-40,-13,-21,0,-6,0,0,0,0,0,0,0,0,0,0,0,16,0,112,-6,11,31,-2,0,0,0,-6,0,-12,0,-2,0,-9,0,4,0,0,0,-40,0,0,0,0,0,0,0,0,0,12,0,0,-4,22,-14,-1,0,-1,-3,-13,0,7,0,0,0,0,-26,0,19,0,0,0,-3,0,-41,9,0,0,60,0,-14,0,-20,0,0,0,-9,-27,0,0,-15,0,0,0,0,0,1,0,-18,0,0,0,0,13,127,0,0,0,-1,0,-17,0,0,0,0,0,0,0,0,0,0,0,14,0,0,82,-22,0,-5,0,0,0,2,0,14,0,0,0,0,0,-12,-40,-10,0,0,0,0,0,0,0,0,0,118,0,0,-28,-43,0,0,0,40,0,-43,0,-4,0,0,0,7,-5,0,0,0,0,0,7,0,0,0,-8,0,0,0,-2,0,-1,0,0,0,0,0,-29,30,0,0,-17,-3,0,-9,0,0,-9,-1,0,0,-1,-18,0,-15,0,0,13,0,0,0,0,20,33,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-7,-15,0,0,-48,27,0,0,-5,0,-20,29,0,20,0,0,0,0,-5,-5,0,-5,0,0,35,0,0,0,0,-4,0,0,-31,0,28,0,0,0,-7,0,0,-2,3,-9,0,16,0,0,-6,0,0,12,0,-1,-1,-1,-1,0,0,0,0,0,-15,0,0,2,0,0,-2,0,0,0,14,-43,0,0,0,0,20,0,0,-14,28,-4,-21,0,0,-13,-1,0,7,0,-21,0,0,0,17,-33,-8,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,0,0,0,0,-16,0,0,0,-1,0,0,0,-23,0,-1,1,11,2,-3,10,0,0,0,0,0,0,0,0,0,-2,-13,0,0,-6,0,-12,34,0,35,0,0,8,0,0,0,0,-64,0,0,-8,0,0,0,0,-2,1,0,0,0,24,-4,0,0,0,0,0,0,-9,0,-10,0,-5,0,-5,0,-1,0,0,0,0,0,0,0,-37,0,0,0,0,0,0,0,40,-21,-57,0,-10,-1,0,0,4,0,0,0,0,0,0,0,-59,0,10,0,-14,0,-1,-14,0,13,5,0,-1,-2,56,30,0,-2,0,-3,0,0,0,0,-3,17,0,0,0,-7,0,0,0,0,11,0,0,0,-17,0,0,0,0,-19,0,0,5,-2,0,-14,-10,-1,0,0,1,0,0,0,0,0,0,0,-35,0,38,0,0,-10,0,0,0,0,-20,2,-3,0,0,0,0,0,0,0,0,0,0,-15,0,5,-12,0,0,0,-4,0,0,0,-50,-5,-20,0,-1,0,0,-1,0,0,-6,0,0,-2,-21,-58,-1,0,0,-17,0,0,0,0,-48,0,0,0,0,0,0,0,65,0,0,-16,0,0,-16,0,0,-20,0,0,0,0,0,0,-18,-3,0,0,31,0,0,5,0,5,-3,24,37,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,3,35,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,-59,-32,-5,-2,0,0,0,1,-2,0,23,-10,0,-1,-44,0,-1,-5,0,0,0,0,-2,9,0,0,-18,0,0,0,0,0,0,0,-10,0,0,0,0,-2,-2,0,0,-1,0,-1,0,0,-9,0,0,0,0,0,9,0,0,0,-7,0,-6,-6,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,-4,0,6,-48,0,0,0,0,18,0,0,0,34,-10,-16,0,0,0,-17,0,-10,-18,0,0,-17,0,0,0,-1,0,-4,-6,0,0,0,18,-6,0,16,40,0,0,0,-3,0,0,-1,0,0,0,7,0,-7,-66,0,-1,-4,-17,0,-10,0,-6,0,0,0,0,0,0,0,0,0,0,8,23,0,0,0,0,0,17,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,0,0,0,14,0,4,0,0,0,0,0,-2,0,0,0,-1,0,-36,0,0,0,0,0,0,0,0,0,0,-2,-1,0,6,0,-2,-10,-21,0,-1,41,0,0,0,0,15,-4,-2,7,0,4,0,0,-7,4,-5,0,0,0,0,0,0,-6,-26,0,0,0,-2,0,6,0,0,0,0,0,0,0,0,0,0,-2,0,33,-3,0,-12,13,0,0,0,0,0,0,-13,0,0,0,0,-56,0,-10,0,-12,0,-4,0,-3,0,0,0,0,-6,0,0,10,0,0,0,0,0,0,0,0,0,42,0,0,0,0,0,0,-12,0,0,-2,0,0,-48,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,-7,-33,-4,0,-14,0,0,4,59,0,0,0,-13,0,0,8,-4,0,0,0,0,0,0,0,4,-14,0,0,0,0,-10,0,0,0,-2,0,0,0,0,1,-10,-3,0,-4,0,0,0,0,-4,-9,0,0,0,-13,0,0,0,0,-8,-2,0,0,0,0,-1,0,-8,-2,-4,-25,0,-1,0,0,0,-26,0,0,-3,0,0,-2,0,0,-13,0,-8,0,0,0,0,3,0,0,-13,-1,-3,0,-38,0,0,0,0,-2,-1,0,-1,0,0,-13,0,-45,0,0,0,-26,-1,0,0,10,0,0,0,0,0,0,0,13,0,0,0,0,0,0,5,0,-9,0,0,-1,0,26,0,-65,0,0,-1,0,0,0,-4,-23,0,-12,0,29,0,0,0,-2,0,0,0,-4,-2,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,-13,0,0,0,0,-3,0,-40,-52,0,-15,-31,7,-10,0,0,0,0,0,0,0,0,-29,-7,0,2,0,0,0,0,0,0,-17,-3,-2,-1,6,0,0,0,-3,0,0,0,0,0,89,0,0,0,-32,-31,0,0,15,-4,0,0,0,-4,-19,0,0,0,0,17,-14,0,0,0,-42,0,0,0,13,0,0,0,0,0,0,-5,0,0,-4,0,-17,7,-15,0,0,0,0,0,0,17,0,0,0,0,0,-13,0,0,50,-8,22,-3,0,-16,0,-4,1,0,0,-7,15,-6,0,5,-17,35,0,0,21,0,0,-9,21,0,0,-5,0,0,0,-16,0,0,0,0,0,-18,2,0,0,5,0,-2,0,0,0,0,12,0,0,0,0,-5,0,-31,0,0,-11,-4,0,0,0,-26,0,-9,0,0,0,0,0,-41,0,-10,0,-9,0,8,0,0,0,0,-6,0,-56,0,8,0,0,-41,0,0,0,0,-14,0,0,-11,0,0,28,8,0,0,0,-8,-11,0,0,0,0,0,0,-10,0,-16,0,0,0,0,0,0,0,0,0,0,13,0,0,0,0,0,-13,0,0,-20,0,0,0,0,0,0,0,-4,-3,0,0,0,0,0,0,0,0,0,0,10,-36,0,-10,-3,0,0,21,25,0,-4,0,0,0,3,51,-1,0,-8,0,0,-9,0,2,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,-3,-9,0,0,-8,0,0,0,0,-2,20,0,0,0,-28,0,0,-43,0,0,5,0,-2,0,-16,-15,22,18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,-28,0,39,0,0,0,-1,-4,0,0,0,0,0,-7,0,-7,-22,0,0,-2,-2,0,-6,-15,-8,0,0,0,0,0,-8,-7,0,-8,0,2,0,0,0,-19,0,0,-7,0,49,-10,0,0,0,31,0,40,0,0,1,0,0,0,-13,0,0,0,12,28,-15,20,0,0,-49,0,0,-2,0,0,35,0,-31,0,0,0,0,0,-26,0,0,-38,0,0,0,-11,0,0,-1,0,-1,0,0,0,0,0,-14,20,0,-3,0,0,5,0,-8,0,0,0,0,0,46,0,-3,0,0,0,-1,0,0,0,-6,0,0,5,0,0,0,0,-14,0,0,0,-17,1,4,0,0,0,0,0,0,0,-17,-33,0,0,0,0,0,-3,0,-5,-2,-37,0,0,0,0,0,23,0,0,0,0,-11,0,-2,-2,0,0,0,0,-21,0,0,-1,0,0,0,0,0,0,0,0,0,-6,0,1,0,0,-7,0,0,0,-3,0,0,0,-49,0,0,0,-17,0,-6,0,0,11,0,-1,2,0,26,0,0,0,0,0,0,14,-11,0,2,-24,-30,0,-17,0,-1,0,-12,-43,0,0,0,0,0,0,0,23,0,0,0,-10,0,14,0,0,0,0,0,0,-1,-47,-34,0,0,-5,0,0,0,0,0,0,0,-3,0,-8,-50,0,-9,-1,2,0,0,-25,0,0,0,-3,0,0,0,-12,-5,0,0,0,-39,0,0,0,0,-3,-4,-8,0,-20,0,-4,0,0,-12,0,1,-1,0,0,-14,3,0,-7,0,0,0,0,0,-19,0,-2,0,-14,0,0,0,0,0,0,9,0,0,-15,0,0,-11,0,0,58,0,0,0,30,-11,-5,-80,0,0,0,0,0,-2,0,0,0,0,45,0,0,0,0,0,0,0,-1,10,0,0,-4,-2,0,0,-1,-70,0,0,-7,0,0,0,-69,-18,0,-9,-3,0,0,0,0,-4,0,0,-2,44,45,0,0,0,-11,-29,-2,0,9,0,0,-2,0,0,-13,0,0,9,0,-27,0,0,0,44,0,0,-7,0,0,0,0,38,-2,0,0,0,0,0,0,0,0,-40,0,0,0,-38,0,0,0,-4,0,0,0,-8,0,0,0,-1,0,0,0,0,-4,-27,0,0,0,0,4,0,0,0,0,16,-17,0,-5,0,19,1,-9,0,0,-5,0,0,0,-4,-26,40,0,0,2,0,-18,0,10,0,0,0,0,-21,0,28,0,0,0,0,0,0,-7,0,-2,0,15,-2,0,52,3,-5,0,-10,0,-18,0,-17,0,0,0,0,0,0,-14,0,0,0,0,0,-1,-51,0,-2,0,0,0,0,0,6,0,-17,-32,0,-2,-4,0,0,0,0,0,-10,0,0,0,0,0,0,-41,-3,0,0,-3,0,-5,-15,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,-1,0,41,-33,0,1,0,0,41,1,-16,-6,53,-8,0,0,-27,-2,0,-41,0,-13,-24,31,-3,0,0,0,0,0,0,-12,26,0,0,0,-57,-2,0,0,-3,-1,0,-2,0,0,10,0,0,-14,0,25,0,0,39,0,0,0,-22,0,0,-15,0,0,0,0,-25,0,-7,0,0,0,0,-2,-22,0,0,0,0,-5,-1,0,0,0,0,-6,27,17,0,0,0,12,0,0,0,0,49,0,23,0,-2,0,0,2,0,-23,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,-74,0,0,-7,0,0,0,0,0,-5,0,0,-1,0,0,0,0,15,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,-9,0,0,0,0,-6,0,0,0,-10,-30,0,0,0,-13,-5,-37,6,0,0,0,-2,1,0,0,0,-20,0,0,-29,0,0,0,33,0,-17,-33,0,0,0,0,0,0,12,0,0,0,0,0,0,0,0,33,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,12,0,0,0,0,0,-25,0,0,0,0,-6,0,0,8,0,0,0,12,-4,0,42,-22,-17,0,0,18,0,0,0,-28,-16,0,0,-3,0,0,14,0,0,0,0,0,0,0,18,0,0,0,0,0,11,0,-54,0,0,0,0,0,0,8,0,0,0,17,33,0,-6,-14,0,0,0,-32,0,0,-1,55,0,-41,0,0,0,-3,0,0,0,0,0,0,-17,0,0,0,0,-9,0,50,0,0,0,0,11,0,0,-16,-1,-3,0,-4,0,48,-11,-8,-15,-3,0,-3,110,0,0,0,0,0,0,43,0,0,0,-3,25,0,21,0,-17,0,0,0,0,0,-4,0,25,0,2,0,0,36,-4,0,0,-8,0,0,-18,24,9,0,-1,0,43,-17,0,0,12,0,0,0,-17,0,6,-8,0,0,-1,0,0,0,0,0,0,0,0,-3,-14,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,-14,-3,29,0,0,7,0,0,0,-9,0,0,-7,0,9,0,0,0,51,-7,-13,0,0,0,0,0,-14,0,102,-30,-3,0,0,0,0,0,0,0,0,-9,-32,0,0,-5,0,0,0,0,0,0,4,-23,0,-7,-1,0,0,0,0,-16,-18,0,-17,-27,0,0,12,0,0,0,0,0,-8,0,0,1,0,0,0,16,0,-3,0,0,0,0,0,-2,0,0,0,-44,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,-6,0,0,-7,0,0,0,-6,-4,-2,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,-2,0,10,0,0,0,-4,-43,0,-18,0,0,30,0,-14,0,-14,0,0,0,0,-4,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,1,0,4,0,0,-26,0,0,0,0,0,0,0,0,0,0,0,0,-2,-23,-8,0,0,0,0,0,0,0,0,0,-12,0,1,0,-4,-4,0,0,24,-50,0,0,7,0,0,13,9,0,-14,0,0,-9,0,0,-11,0,-6,0,0,0,0,0,46,0,0,0,0,-29,5,0,-5,0,0,3,0,0,0,-8,0,0,0,0,-1,0,0,-22,0,51,0,0,-10,0,0,0,0,0,-4,0,0,0,1,0,0,0,0,-2,0,-7,-1,-6,0,0,0,0,0,18,0,0,30,17,-13,0,0,0,0,-5,0,29,0,0,0,0,0,17,17,-1,0,0,0,10,-58,-17,-36,-6,0,0,0,0,-5,0,-12,-1,-17,0,0,0,0,0,0,0,-21,0,-16,0,0,-31,0,21,0,-11,0,0,0,0,-10,21,0,0,0,20,0,-10,-16,0,-14,0,0,-9,0,37,0,0,0,0,-1,-2,-43,-1,0,0,0,21,0,-7,0,0,0,0,0,0,0,0,-9,0,0,25,0,-11,-10,-47,0,-3,0,0,0,0,0,0,-4,-53,0,0,0,3,0,0,0,-7,0,0,-10,-1,72,-2,0,5,0,0,0,0,0,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,-25,0,15,0,-33,0,0,0,0,-8,27,-19,-7,0,0,0,-25,0,0,0,0,0,0,19,0,2,0,-3,0,0,0,0,0,0,21,0,-22,0,0,0,-16,0,0,0,21,0,0,0,0,-35,0,-5,0,0,0,0,-7,0,11,0,7,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,25,-15,25,0,0,-10,0,0,0,3,0,0,0,0,0,0,0,0,0,0,-26,-27,0,0,0,0,-37,0,0,0,0,10,0,-32,0,-1,0,0,-39,0,15,-1,0,28,6,0,-17,0,0,-20,0,0,0,0,-1,-1,0,0,27,17,0,0,-1,0,0,0,-10,0,3,-10,0,-40,0,8,-7,-23,0,-10,0,0,-13,0,-5,-28,0,-7,0,0,0,0,-28,0,-21,0,0,-21,0,0,0,0,56,0,0,0,0,14,0,0,-4,0,-62,0,0,0,0,0,-4,-16,0,-5,0,0,0,0,-6,0,0,0,0,-5,19,0,9,0,0,0,0,-1,-60,0,0,0,-1,0,-40,0,3,0,-24,-13,0,-52,0,0,-13,0,0,0,0,-1,54,0,0,0,-14,-4,20,0,-43,0,0,-13,-6,0,0,-32,-3,0,0,0,0,0,-15,0,0,-1,0,0,0,28,0,0,0,0,0,68,-6,-8,0,0,0,-8,0,0,5,-7,-1,0,23,-3,0,0,-17,0,0,0,0,0,0,19,13,0,-6,-29,0,-1,-6,-38,0,-6,0,0,3,0,0,-20,0,18,0,0,-23,0,-5,0,0,-3,0,-10,0,54,18,0,0,0,-8,-4,0,0,-8,0,0,0,0,0,0,-17,0,0,-3,0,0,11,0,0,0,0,0,0,23,-18,-16,0,-37,0,0,14,4,-4,0,0,0,-3,-22,0,0,0,0,41,0,0,-16,0,0,-11,-4,0,0,0,-6,-2,0,0,0,-2,-1,0,30,0,0,-2,0,0,0,-53,-15,-21,0,0,0,0,48,0,-8,0,11,-1,0,0,0,0,42,-8,0,0,0,0,-20,-2,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,-7,0,0,0,0,-2,0,-10,0,0,0,0,0,0,0,0,4,27,0,0,-9,0,32,0,0,0,0,0,21,3,0,0,19,39,0,0,0,26,0,0,0,0,22,0,0,-47,0,-8,-11,0,0,-21,2,0,0,-2,0,34,0,-1,0,-10,0,-20,-8,0,-3,0,5,0,0,0,-1,16,0,-4,0,0,0,0,0,4,0,-6,-7,0,0,0,0,-19,0,0,0,0,1,-43,0,35,0,0,0,0,0,0,0,-28,0,0,-1,0,0,-3,15,-4,0,0,0,26,-5,-5,0,-5,0,0,0,17,0,0,0,-16,0,0,0,9,-21,-10,-4,0,35,0,0,0,0,-61,0,-21,0,0,-15,0,0,8,0,0,0,0,0,0,-2,0,0,0,36,0,0,0,-35,-17,0,0,3,-16,0,-2,7,54,0,-11,1,-75,0,-16,0,0,-16,-2,0,0,0,-50,-1,0,-6,0,0,0,0,-11,0,0,0,0,0,0,-12,-12,21,0,-46,8,-19,-4,0,0,-14,-8,18,0,0,-16,0,-19,0,-4,-6,0,3,-26,0,0,0,0,0,0,0,15,0,5,7,0,0,0,0,-12,0,0,0,49,0,0,-3,0,0,23,-7,0,0,0,0,0,0,-3,-2,0,0,0,0,0,31,-4,0,0,0,17,1,0,0,0,0,38,0,0,0,0,0,0,0,0,-1,0,-40,0,-7,0,-4,21,0,0,0,0,0,0,0,0,1,-37,-31,0,0,0,0,-6,-24,0,-4,0,0,0,0,-3,0,-16,0,8,-10,0,0,0,-3,11,-3,0,-2,10,-6,0,0,0,0,11,-40,0,-18,0,0,0,0,-3,0,-4,0,0,16,0,0,0,0,0,0,19,0,0,0,0,0,0,0,0,0,0,30,8,0,0,0,0,-9,0,0,-28,0,0,0,0,0,0,-1,0,-5,0,0,-2,0,0,0,0,0,0,-9,0,0,0,-10,0,0,-21,0,0,0,-40,-41,-7,0,-1,0,21,52,0,5,0,-2,0,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,0,0,0,0,0,-35,0,-2,-4,0,0,-10,0,0,-14,0,0,0,-2,0,9,0,0,0,0,0,0,15,0,0,0,0,0,-5,0,5,60,-13,0,0,22,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,-16,-7,-20,0,-63,0,-8,0,0,-3,0,-9,0,0,0,0,36,0,-13,-9,20,0,0,0,0,-2,0,0,26,0,0,0,0,0,0,0,80,0,0,-64,0,0,0,0,4,0,0,0,-18,0,0,0,0,0,-4,0,16,0,0,0,0,-8,-8,0,0,0,0,-37,-10,0,0,-26,0,0,0,0,-19,30,0,0,-1,63,0,0,-7,33,0,0,0,0,0,1,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,1,25,-12,0,-46,-15,0,0,-14,40,0,0,0,0,-42,0,0,0,0,0,0,-30,-8,-12,0,0,0,-18,0,-5,0,0,0,0,0,0,-14,0,0,0,-15,0,0,0,-2,-11,0,0,10,0,0,24,0,0,-3,-19,-11,0,0,0,9,11,14,0,-4,1,0,0,-5,0,0,0,0,17,0,0,0,-39,0,-13,-5,-9,0,0,0,0,0,0,0,0,17,-4,62,0,0,0,-49,0,0,0,0,0,0,0,0,-4,0,-10,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,13,-15,-24,0,0,-17,0,0,0,0,-3,-3,0,-10,0,0,0,12,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,-3,0,-51,0,0,0,0,-11,0,0,0,0,9,0,0,3,0,-14,0,-1,0,0,-3,0,0,0,-51,-13,0,-26,0,0,0,0,0,0,-3,0,27,-29,0,0,0,0,0,0,-3,-5,0,-20,-22,0,0,0,0,-12,0,0,0,-1,0,-3,23,0,-38,-16,0,0,0,0,0,13,0,8,0,-7,24,0,-20,-55,9,-17,0,0,0,-21,0,-10,0,22,0,0,0,-3,0,-1,0,-1,0,0,0,-5,0,0,25,0,-2,0,-4,0,0,0,0,-9,0,0,-12,0,5,0,-6,-36,-3,0,0,-2,-16,-20,0,0,0,-15,0,0,-54,0,0,0,0,-5,0,0,0,0,-3,0,-10,-14,-13,-22,0,-3,-10,0,0,0,0,0,0,0,0,-6,0,0,0,-14,-4,0,0,0,0,0,0,0,0,0,0,-16,0,0,30,0,0,0,-3,1,15,0,0,0,0,0,0,-24,0,-30,-2,0,-5,-2,0,-29,0,0,0,0,0,-7,0,-3,0,0,0,0,0,0,-1,0,-5,0,0,-4,35,0,0,21,-2,0,-2,0,0,-9,0,-1,-11,0,0,0,0,0,0,0,6,-33,50,0,0,0,-2,-30,-19,-20,-2,0,0,-19,0,-9,0,0,0,0,0,-1,-6,9,0,-12,-3,0,0,0,0,-41,-24,-3,0,-1,0,-2,34,0,-16,0,-3,0,0,25,0,0,0,0,0,-53,0,39,0,0,0,63,0,-1,0,0,-11,0,54,0,0,38,0,0,0,-8,0,-6,13,0,0,0,0,0,0,0,0,0,-1,0,0,-57,0,-42,-1,-7,-21,-10,0,6,0,0,0,0,0,-5,-13,-35,-3,-36,0,-52,0,0,0,0,0,-22,-15,-14,0,-8,0,0,0,16,0,0,-15,0,0,0,0,-11,0,0,-50,-2,0,0,-31,0,0,-4,0,29,0,0,0,0,0,0,0,0,0,0,-7,0,-2,-2,21,0,-1,0,-26,0,0,0,19,0,0,-4,0,-31,0,0,0,20,-2,0,0,-1,0,0,0,0,0,-8,0,0,5,48,-2,-2,0,0,9,0,0,-5,0,0,0,0,-8,-10,-15,0,0,0,0,0,0,0,-3,0,0,-13,0,0,0,0,0,0,-11,-9,-9,6,0,17,0,-4,1,0,0,-4,9,-2,-5,0,0,10,0,0,-16,0,-6,0,0,-34,0,0,-6,-14,-1,0,-4,0,0,0,0,-4,0,0,-2,0,0,0,0,-2,0,0,0,0,0,40,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-4,0,-4,-22,-7,-9,-20,46,0,0,0,0,-12,0,31,-11,0,0,0,0,0,0,-1,0,0,0,-1,-21,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,3,0,7,0,0,-19,-10,0,0,0,0,0,2,0,9,-6,-1,0,0,0,0,0,0,0,-3,-9,0,-11,0,-2,0,-1,-18,0,0,-4,0,0,-3,0,0,0,0,0,5,0,26,-10,-10,0,0,0,0,-22,0,-63,0,0,0,0,0,0,0,-4,0,0,0,0,0,-45,0,0,0,0,-14,14,0,-9,-5,0,0,-55,0,0,-6,-2,0,28,0,0,0,-9,0,0,0,31,0,0,-19,0,-4,0,0,-4,0,-2,0,0,0,1,0,0,0,0,0,-4,-3,0,-41,0,0,-2,-37,0,46,0,0,-10,-47,-9,0,0,0,0,60,0,-6,-4,0,0,-19,-1,0,0,14,0,-19,0,0,0,-4,0,0,0,0,-24,0,0,0,0,0,-7,-1,0,0,0,-44,-21,-4,0,0,0,-9,0,-15,0,0,0,-2,0,0,5,-2,0,0,0,-3,-5,0,-3,-10,0,0,0,0,0,0,8,-3,0,0,0,0,-1,0,-20,0,0,0,0,-3,-24,0,-11,0,0,0,0,-2,78,0,0,0,0,0,-45,0,-10,0,4,-33,0,0,0,0,0,-1,0,-2,0"
 var MODEL_DISCLOSURE = "b:-0.8942231860237028;s:0.029776354149944898;w:-47,-39,0,0,0,0,69,0,-27,0,33,5,-7,-42,-12,-6,0,0,0,-13,52,0,0,0,0,0,0,0,0,-26,0,0,0,0,0,0,0,1,0,0,0,0,0,-5,0,0,0,0,53,0,0,0,0,-2,0,0,0,-6,2,0,0,0,0,-8,-25,0,0,-11,0,0,0,0,0,12,48,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,53,29,43,-10,0,0,0,0,-21,0,0,-8,0,0,0,4,13,0,0,-6,30,0,0,0,0,0,0,0,0,0,5,0,-1,0,0,0,0,0,0,0,0,0,0,-4,0,0,34,0,0,0,-13,0,-3,0,0,0,0,-12,0,0,0,0,57,0,30,10,0,0,-46,0,-23,0,0,0,-4,0,-16,0,-1,-7,0,0,0,0,0,0,0,0,-18,0,0,-11,10,0,-5,-22,0,0,0,0,0,-11,0,-3,-7,58,48,0,0,11,-13,0,0,-4,-25,-14,0,35,0,-9,-6,0,0,20,-2,0,0,51,-12,0,42,7,-1,0,37,-5,-16,0,0,0,0,-8,0,40,-1,15,0,-3,0,22,0,0,0,43,0,0,-17,-7,0,0,0,-2,2,0,0,-21,4,0,0,1,0,0,-2,0,0,8,-1,-9,-14,0,0,0,0,-28,-10,0,-28,0,0,-5,0,-17,0,0,-1,-5,-4,0,0,-39,9,0,-7,20,0,0,-18,0,0,0,0,62,0,0,-20,0,32,0,15,0,0,0,0,9,0,8,-33,0,0,0,0,0,32,-19,20,0,0,-6,0,0,0,0,0,0,26,0,0,11,0,0,0,-5,7,0,-30,0,0,2,-31,1,-6,0,0,49,-17,0,0,0,0,0,0,0,-1,0,0,0,0,-21,0,-46,0,42,0,0,0,0,0,0,62,-19,0,0,-19,65,0,0,0,7,0,-8,-2,0,0,0,0,0,25,-4,0,0,-9,0,0,0,0,-20,0,-5,-4,0,0,0,-36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,-3,0,0,0,20,0,0,0,0,-6,0,0,0,-27,0,0,0,0,-61,0,0,-29,0,-12,-11,0,0,-1,0,46,0,0,-7,-7,-2,65,0,-2,55,7,0,0,18,-6,0,0,22,12,-1,0,-3,0,0,0,0,0,0,19,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,53,0,0,31,0,0,10,0,0,23,0,0,0,0,0,-38,20,-3,0,23,17,0,0,0,-7,-4,0,0,0,-25,0,0,0,0,0,0,0,0,1,-21,0,1,0,0,0,51,-12,0,-25,0,0,-10,0,0,0,0,0,0,0,28,0,0,0,-3,0,-2,0,0,0,0,0,39,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,28,0,0,0,0,-16,4,0,0,-15,0,0,-7,0,0,0,21,-4,0,-1,0,0,0,0,0,22,0,0,0,0,-5,17,21,0,0,0,-37,-9,3,0,0,31,0,11,-12,30,0,0,0,0,27,0,0,0,0,0,-8,0,0,0,0,0,0,0,55,3,0,0,0,0,0,3,-32,-50,10,-3,0,0,-9,3,0,-14,0,0,0,0,-6,44,0,3,0,0,0,0,0,0,0,13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,38,0,0,3,34,-1,0,0,0,0,0,-10,-31,0,25,0,0,-7,0,0,0,0,24,-13,0,0,0,0,0,0,-8,28,39,31,0,0,0,0,0,0,0,0,13,0,0,7,-1,0,0,0,0,0,0,0,0,-20,0,0,13,-13,0,39,0,0,0,0,13,0,0,0,49,0,-14,30,12,0,0,-1,0,1,-12,0,-16,4,0,0,-29,-24,0,0,0,16,0,0,0,-20,0,0,0,28,0,0,0,0,-17,0,37,38,0,5,0,46,0,-1,-13,-13,0,18,13,0,0,0,23,0,0,0,0,0,-12,0,-6,0,0,0,0,0,0,-16,1,0,0,0,39,0,6,0,0,0,0,0,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,31,-5,26,-15,0,-2,0,-5,0,0,0,0,0,0,-4,0,-12,-5,0,0,0,14,0,0,0,0,32,-24,0,0,0,42,0,0,-3,11,0,16,0,0,0,0,0,-3,0,36,52,-15,0,-22,0,0,0,6,0,46,0,0,0,0,0,-54,11,0,-4,0,0,-6,0,-1,0,50,0,-10,0,-16,0,0,0,-10,0,0,0,49,-7,0,16,0,0,0,50,-12,0,0,0,18,0,5,0,-8,0,59,0,0,0,-6,22,0,0,4,0,-3,0,0,0,0,0,-41,22,0,0,0,-17,0,0,10,0,0,0,0,-17,1,-6,-19,-9,0,-12,1,17,-3,0,0,14,0,0,0,-11,0,0,0,0,0,-7,0,0,0,-2,0,0,-18,0,0,0,0,51,0,0,-12,0,0,0,0,0,-5,-16,0,0,0,0,1,37,0,6,0,5,16,0,0,-18,0,0,0,0,-13,0,0,14,6,35,0,-14,-17,-2,0,0,0,24,0,0,0,0,7,0,3,2,0,44,-12,-32,-10,0,-34,0,0,0,0,0,4,-20,-10,0,-29,0,0,0,14,0,36,0,-19,0,0,-20,0,0,-11,0,0,0,-59,0,-25,0,0,0,9,-14,-10,0,0,0,0,0,0,9,0,0,0,-4,-8,-4,-19,0,0,0,64,-1,0,0,-40,-4,0,0,0,0,0,0,0,0,53,25,-51,5,0,0,0,0,0,0,0,0,0,0,0,-21,7,0,0,0,-33,0,-19,0,0,-5,0,9,-37,27,0,-21,0,0,-11,-21,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,-1,-5,78,0,0,-17,0,-4,-3,0,9,0,0,0,0,0,0,0,0,0,0,34,-4,0,0,-2,0,0,0,0,-1,14,-21,0,0,1,0,-2,0,0,-6,-4,0,3,0,0,0,-27,0,0,0,0,-11,0,0,0,0,0,0,4,0,0,0,-34,0,0,0,4,0,0,-7,0,0,0,0,-15,-33,0,0,0,27,25,-19,0,0,0,0,-25,-8,0,0,0,0,0,4,55,21,0,-3,26,0,0,0,0,18,0,0,0,0,0,0,0,0,-19,0,21,30,-7,14,0,0,0,0,0,18,16,0,-11,-32,0,0,-48,0,-2,0,0,0,0,0,-11,0,-4,37,77,-58,0,5,0,44,0,55,37,0,0,0,0,-19,0,0,0,0,0,0,0,34,0,0,-20,0,0,0,-6,0,48,-24,0,0,0,0,0,0,-2,0,64,-23,0,-2,-30,0,84,0,0,0,0,0,0,-22,39,0,-14,-1,0,11,0,26,0,0,0,0,-7,0,0,0,0,0,-1,0,0,-29,0,0,0,2,26,0,0,0,-13,-4,0,0,0,0,-7,0,0,0,-5,-1,-4,0,34,0,15,0,0,0,0,0,0,0,-2,50,0,31,0,0,24,0,-5,0,31,0,5,0,0,0,0,0,0,-6,13,34,0,0,0,-4,0,31,3,-12,0,-22,0,-1,0,0,-1,0,0,-11,0,0,0,0,12,0,0,0,-67,0,-3,-1,0,0,0,-29,21,0,0,29,0,-5,0,10,0,0,-11,0,0,11,0,0,0,0,-2,0,-1,-16,0,0,0,18,0,0,-15,0,57,0,0,0,16,0,0,-23,-3,0,0,-9,0,-1,0,0,-11,0,0,-6,0,0,0,0,-32,0,0,0,0,0,0,43,0,0,0,-9,-9,0,14,0,0,0,0,0,19,0,0,0,0,0,0,0,0,0,0,0,0,-1,8,27,0,0,0,0,0,34,0,-2,0,0,0,16,0,0,-3,0,0,0,-6,0,0,0,-18,-19,0,0,0,0,-17,0,3,-13,0,0,0,0,0,-2,8,0,0,8,-13,0,0,0,0,0,0,0,0,-10,0,0,0,17,0,0,0,0,-10,0,0,0,-2,-5,-5,8,0,0,-13,-36,0,0,0,-17,0,0,0,0,0,0,8,-17,0,0,0,0,0,0,8,0,-18,0,-2,-21,9,0,0,0,0,0,0,0,0,-1,1,0,0,0,0,0,0,0,0,0,0,0,0,37,0,0,0,-1,0,0,66,29,0,-24,-21,0,0,0,0,0,64,0,0,0,0,0,25,0,1,0,0,0,0,76,0,0,-24,73,-10,0,0,2,51,-45,0,0,0,0,-9,0,0,6,-76,0,13,-9,0,-77,-21,-21,0,0,-6,48,0,0,0,0,0,35,7,0,0,0,0,0,24,0,0,0,-8,0,0,0,52,0,0,46,1,0,0,0,-9,0,0,0,0,0,0,0,0,-1,0,0,-40,1,50,0,-44,0,0,0,2,0,0,-11,0,0,0,0,0,0,-16,0,-42,19,0,51,0,11,0,0,0,0,12,-14,0,0,7,-5,0,0,19,3,29,-7,-31,0,-15,0,0,0,0,0,0,0,11,0,0,-41,-1,0,0,0,0,0,7,0,0,-12,0,0,0,0,0,0,0,0,-9,0,20,0,0,-15,3,0,0,0,0,-10,28,0,-19,0,0,-10,0,12,0,0,-18,0,4,0,27,-1,0,0,17,0,-22,52,-6,0,0,0,-2,0,0,0,0,0,64,0,0,0,0,1,0,0,-12,0,0,-2,6,0,0,12,-26,32,0,60,-12,0,-59,0,0,0,0,0,87,-10,65,-9,0,0,0,0,0,42,-7,0,0,0,14,0,17,0,0,-12,0,0,0,48,0,0,-6,-58,0,11,0,0,0,0,0,0,0,0,3,0,0,0,0,-5,-26,0,0,0,0,0,4,0,0,18,0,0,0,0,-7,0,0,0,0,0,0,5,0,-27,0,0,0,12,0,0,0,33,20,13,0,50,21,0,0,0,-52,0,3,0,0,0,0,13,0,-8,0,-10,0,26,0,-12,0,-16,46,0,0,0,0,0,0,6,18,52,27,0,0,0,0,0,0,0,41,0,-15,0,0,0,0,0,-31,0,0,0,0,0,-25,0,0,0,0,15,0,0,0,31,-31,11,-5,43,0,0,0,0,0,0,-5,0,0,0,18,0,0,-5,0,0,21,-65,27,24,0,0,0,-26,0,0,0,46,-5,0,0,0,-4,0,14,0,0,0,-61,-10,0,51,0,0,0,9,0,0,-1,21,0,0,-55,0,0,-55,-12,0,0,0,-13,-5,0,0,0,0,29,3,0,0,0,0,0,0,0,0,0,0,0,-1,-10,0,0,0,0,0,3,0,0,3,38,0,0,11,0,0,14,0,0,0,-1,0,0,0,-41,0,0,0,0,0,27,0,0,0,0,-6,0,0,-8,-13,0,0,0,33,0,0,0,0,31,-12,14,-18,0,0,0,0,-1,0,0,11,0,0,0,-2,0,7,-13,-11,-3,0,0,-16,0,0,0,0,-2,0,0,0,0,0,0,0,0,-16,0,-19,-9,0,0,0,16,33,0,0,0,0,0,0,46,0,0,0,-35,0,0,0,0,44,0,-23,30,0,0,0,0,0,0,0,0,0,11,0,-5,5,-75,0,0,-5,0,0,0,0,0,3,0,0,-17,0,0,0,-15,0,9,0,-31,0,0,0,0,-61,0,0,0,4,0,0,-11,47,-8,0,0,-1,0,0,50,0,26,0,-1,-8,-5,0,0,0,43,0,0,0,0,0,-12,16,0,0,0,43,0,0,0,0,0,0,0,21,0,62,-8,0,26,0,0,-18,-2,0,-3,0,0,0,-76,0,-1,0,0,0,0,59,0,-3,0,0,0,26,-10,0,0,0,38,-2,0,0,60,-11,0,0,0,0,0,0,-19,-30,0,0,-6,-26,0,0,8,0,-16,-22,0,-2,6,0,0,0,0,0,0,0,-3,0,0,0,-15,0,46,0,0,-3,0,0,-12,0,-5,58,0,0,0,14,0,-3,0,-1,-87,-5,-2,0,-30,0,-10,0,0,-5,0,0,-8,48,0,0,0,0,0,0,0,0,10,0,0,0,0,-7,44,0,-23,23,-3,0,0,0,0,1,0,0,-20,0,-3,10,0,3,33,24,0,-10,-12,84,-1,25,0,-6,0,1,-5,0,-35,0,0,4,0,0,0,-11,0,0,0,0,0,-13,0,0,2,0,0,0,0,0,0,0,-37,-36,0,38,0,0,26,0,0,12,-20,0,16,0,0,0,0,0,0,0,0,0,0,0,0,-36,0,0,0,-12,0,0,0,0,0,0,0,0,-5,-9,0,0,0,0,23,0,0,0,0,0,0,0,0,-12,18,0,0,0,0,-8,0,0,0,0,0,-3,0,0,0,-4,0,-22,-15,0,0,0,0,0,13,11,0,0,0,-1,0,0,-15,56,-5,19,-2,50,0,0,-2,0,19,0,0,-77,0,0,0,0,0,0,0,0,37,-45,0,0,0,0,26,-2,0,-1,-24,0,0,0,-30,0,-6,0,0,3,-5,0,3,-8,0,73,-27,0,-6,0,0,0,2,-12,13,0,0,0,-7,0,-15,-13,0,-6,0,0,0,-20,0,0,-4,0,-9,-20,-18,0,0,0,0,0,31,0,0,0,0,0,0,0,14,0,41,-9,0,-11,0,-18,-7,0,0,0,-21,0,0,-5,0,0,38,0,0,0,-5,-1,51,0,0,-7,0,41,0,0,14,0,24,0,-9,0,2,0,-1,-1,0,-4,0,0,0,0,-14,0,0,-1,-18,0,0,0,33,0,0,0,0,-14,0,-15,22,0,0,0,0,0,0,0,0,-19,0,-4,0,0,0,1,-7,0,-7,0,0,0,15,-3,0,0,0,43,0,0,-5,0,0,0,0,25,-15,0,-6,-8,-38,0,11,15,27,0,0,0,0,0,0,0,37,0,-9,0,0,0,-3,0,0,0,0,0,0,80,0,0,0,6,0,0,0,-43,-9,0,0,25,0,13,0,0,0,-27,13,-14,0,0,2,0,0,0,0,51,0,0,0,0,0,-4,-7,0,15,0,0,0,0,0,-1,0,-8,0,-7,0,0,34,-24,-11,-7,-43,0,0,-9,-14,0,0,0,0,0,0,1,0,-15,21,0,17,0,0,0,0,0,0,0,0,0,0,86,0,0,27,-6,-9,0,0,0,0,-10,5,0,-15,0,0,0,0,1,10,0,0,0,-33,-29,0,0,9,0,26,-27,0,-19,-15,16,-8,0,0,0,2,0,0,0,0,0,19,0,0,0,23,-2,3,0,65,0,0,6,0,0,-19,21,0,0,16,0,0,0,0,0,0,0,0,0,0,1,0,0,0,37,28,0,0,0,0,0,21,0,0,0,0,0,0,0,-19,0,0,-6,0,0,-5,0,-30,0,10,-6,-17,8,0,-47,0,0,0,0,-2,0,-18,1,41,0,0,-1,0,-20,56,-32,0,0,0,-37,-33,0,27,0,0,0,0,0,8,0,46,-31,0,-44,-2,0,0,0,0,-18,23,0,0,0,0,0,0,0,0,0,0,-3,0,55,0,-19,53,1,0,0,0,0,0,0,-3,0,0,0,0,0,0,25,1,0,0,-14,23,0,4,0,0,2,-43,17,0,0,0,0,0,14,0,0,0,-14,-1,0,-26,-17,0,0,-8,0,0,0,0,0,0,55,0,0,-6,0,-13,0,-4,0,0,0,0,51,0,0,0,0,26,13,43,0,0,0,-37,25,0,0,0,41,0,-8,0,0,0,0,0,0,0,0,0,0,-8,15,0,-30,0,0,53,0,-8,12,0,-7,-39,0,0,0,-11,0,0,0,0,-6,0,0,-10,0,35,0,0,-5,-5,13,12,0,22,0,0,0,-18,0,-5,-6,0,0,75,0,0,0,0,18,0,0,0,0,0,0,0,-12,-1,0,0,0,6,0,0,9,0,0,0,-1,0,26,17,-27,86,0,0,27,-1,59,0,12,0,0,0,-3,0,0,-7,0,-38,0,0,14,0,0,0,0,44,0,0,0,4,0,-5,0,54,0,0,0,17,-19,-16,0,0,-17,-8,0,0,-1,0,0,0,0,0,0,-4,0,-6,0,0,0,-6,0,0,0,0,0,0,26,0,-11,0,0,0,-25,0,-5,35,-4,0,-30,-58,0,0,36,0,0,0,0,0,0,-25,0,0,-6,38,0,-30,0,0,0,0,0,0,12,0,-64,0,0,0,0,0,0,0,0,0,0,32,-7,-23,43,0,0,0,-1,0,28,0,23,34,0,0,0,0,-22,-24,0,0,0,21,1,17,0,0,0,-14,0,-3,-17,0,0,0,0,0,-8,0,0,0,0,28,0,0,0,0,-3,0,0,0,0,0,0,-20,0,0,0,-3,0,0,0,0,-19,0,0,0,0,0,23,0,0,0,0,0,-12,0,0,0,0,0,0,0,31,23,0,0,0,-5,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,48,0,0,0,30,0,28,-7,0,0,0,0,0,0,0,0,0,3,0,-8,0,0,-8,0,1,0,0,-3,0,-3,1,0,-11,-9,0,-16,0,0,0,0,10,0,0,-9,0,0,-63,0,0,0,0,-22,0,-11,0,-19,0,0,1,13,0,0,35,0,0,0,0,0,0,10,10,0,0,0,0,-17,0,0,0,0,0,35,-3,0,14,0,0,0,29,49,-25,0,0,0,-12,-50,-15,1,-67,0,0,-2,12,-20,0,4,0,0,0,0,-19,36,0,48,-12,-9,35,0,0,-15,-17,0,0,-2,0,0,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,48,0,0,0,0,-9,14,0,0,0,22,0,0,0,0,0,0,-4,0,0,0,13,-5,0,0,35,0,0,34,0,-4,0,0,0,0,3,-10,0,0,0,40,28,0,0,34,0,0,13,0,0,0,26,0,0,-4,-12,0,6,-1,0,8,0,0,0,-4,0,25,0,0,0,0,0,35,0,-3,0,0,0,0,0,0,37,-2,0,0,0,0,0,0,0,0,-11,0,0,0,-8,0,0,-5,0,25,20,0,0,0,22,-14,21,-54,-28,0,0,0,0,0,0,0,0,3,-13,0,0,0,0,-9,-20,0,-5,14,0,0,0,0,4,0,4,0,33,0,20,0,0,0,0,-4,66,12,0,26,-9,0,0,-6,-6,0,0,0,0,0,0,11,0,0,0,0,1,0,51,0,0,-13,0,0,41,0,0,0,0,0,0,10,31,0,-7,0,0,0,27,21,-9,0,0,21,0,60,0,0,3,0,0,18,13,0,0,0,0,39,0,0,0,0,14,0,2,0,-13,0,-28,0,0,0,0,0,-2,0,-17,-41,0,-22,-17,0,-10,0,45,53,0,38,68,8,0,0,0,0,0,0,25,-24,0,0,-21,-33,0,0,44,17,-14,0,-18,0,0,0,10,0,0,32,0,1,0,0,0,-3,0,0,0,-10,0,0,14,0,49,-6,0,0,0,0,-2,0,-11,0,10,0,43,0,15,0,0,-16,0,0,0,0,-26,0,0,0,39,36,0,0,0,18,0,-1,0,2,0,0,0,0,0,-1,0,-1,0,0,0,0,31,0,6,0,0,0,-21,0,0,4,0,-15,0,0,0,0,0,42,0,19,0,12,0,0,-10,0,-18,-4,-1,-44,0,0,19,0,0,0,0,33,0,0,0,17,19,0,0,0,0,0,32,0,72,0,4,23,0,3,-2,7,0,0,12,0,-7,0,0,0,0,0,0,-19,-10,-1,14,0,49,0,-5,0,30,0,0,0,0,15,0,0,0,-13,0,11,0,26,0,0,28,0,0,0,42,0,0,6,0,-13,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,54,0,0,0,0,0,-17,0,0,0,0,0,0,-5,29,0,-1,-11,0,-17,0,0,0,-8,0,0,0,-18,34,0,0,0,0,0,0,-15,0,0,0,-81,-2,0,0,0,0,0,7,0,-9,0,-65,38,0,0,0,0,0,-2,-29,0,0,0,0,0,0,0,0,0,4,0,0,0,0,-5,0,-5,39,0,0,26,0,0,-22,0,-3,-5,-76,9,-12,0,0,0,0,0,2,0,0,0,0,23,0,0,-5,-12,0,-11,9,0,28,-10,23,69,0,-30,54,0,0,0,-30,0,0,-41,0,0,0,46,-9,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,9,0,0,0,-14,0,0,0,0,0,0,0,-19,0,0,0,-4,0,0,-12,0,-15,0,0,0,15,0,21,0,0,0,9,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,32,0,0,-20,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,-21,33,-5,0,0,0,0,0,-1,0,0,0,0,33,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,-16,0,-2,0,0,0,0,15,0,0,0,-7,0,0,0,0,-2,-1,0,10,13,-9,0,42,-6,0,13,0,0,0,0,-6,0,0,0,0,0,21,-1,0,-8,0,0,0,-11,-20,59,0,61,-18,0,0,0,0,-2,0,0,0,0,0,0,-6,-16,0,0,0,-12,0,0,0,-3,41,-3,0,0,0,0,-39,0,-5,0,0,0,0,0,-1,0,0,0,-37,0,-11,0,22,0,-2,0,0,-14,0,0,29,-11,0,-25,22,2,-4,0,0,0,0,21,-10,-5,-10,0,-18,36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,-2,0,0,0,6,0,0,0,0,0,0,0,0,-33,0,0,0,7,0,30,0,0,0,-1,0,-9,2,0,0,-5,0,0,0,0,0,0,23,0,-57,-1,0,-2,0,0,0,26,-4,0,0,4,0,0,0,0,0,0,14,0,0,0,0,-42,0,0,0,0,0,-10,0,0,33,0,0,0,0,0,0,0,0,0,0,-14,-21,0,17,0,-3,0,-6,53,1,0,0,0,0,0,-3,-1,3,53,2,0,84,0,0,-29,0,0,29,-7,54,-1,0,0,0,0,0,0,0,-16,0,0,0,2,16,0,7,0,7,0,0,0,-25,23,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-20,0,0,0,0,0,9,0,-12,-7,0,17,0,0,49,28,50,0,0,0,0,-13,0,0,-1,0,0,0,-75,2,0,0,0,0,0,0,0,0,0,-21,0,0,61,0,0,0,0,-9,16,-7,0,0,0,0,-1,0,0,64,0,0,0,0,-34,0,0,29,0,0,-35,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,97,0,-19,61,0,0,0,0,0,0,-8,-22,0,0,0,0,0,0,0,0,0,0,-7,-13,0,-42,-1,0,0,-2,23,-5,0,0,0,0,-17,-3,78,0,0,5,0,-8,-4,0,0,0,0,0,48,0,-9,0,56,0,0,0,22,0,0,0,0,0,0,0,-3,0,90,0,0,0,0,0,-6,19,0,0,49,0,0,3,0,0,-6,-3,5,0,0,0,0,0,0,-9,21,1,0,0,-21,39,-34,-10,0,18,0,28,0,0,21,28,0,0,15,21,0,39,-78,-22,6,5,0,0,0,0,0,-1,0,0,0,0,0,-11,-5,0,0,0,0,-7,0,-4,-51,0,-44,0,0,5,-70,28,56,0,0,0,0,0,0,0,0,0,0,0,0,0,18,0,-26,-3,0,-9,13,-30,0,-1,0,-7,0,0,0,0,0,0,0,21,0,0,-4,0,1,0,0,25,0,0,0,-4,0,44,0,0,0,0,0,0,0,0,0,0,12,-5,0,14,-42,-10,0,0,22,21,0,15,0,0,0,0,0,0,9,0,0,0,51,-13,0,-1,0,-17,0,-13,0,-18,0,-12,0,0,-17,37,0,0,0,-10,0,1,0,0,-24,-1,0,49,-78,0,0,9,0,0,0,0,-9,0,0,33,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,2,0,0,0,0,0,20,0,0,0,0,0,9,0,0,33,0,11,0,0,0,0,0,-13,0,-13,10,0,-8,0,0,-8,2,0,0,7,-7,0,-14,4,0,0,-2,0,0,51,0,0,0,13,0,0,0,0,0,79,0,0,-5,0,-7,0,-7,0,0,0,0,-8,0,36,-69,-1,0,26,0,0,0,6,0,0,0,0,0,0,31,17,0,0,-11,0,0,0,-16,0,0,0,0,5,64,0,49,0,1,0,0,0,0,0,0,-5,0,-12,0,0,0,0,0,0,21,0,0,0,0,0,0,0,0,-48,-3,-4,0,0,-50,0,0,-3,-1,0,0,0,0,-8,0,0,-7,-1,-6,0,0,-17,0,0,0,0,0,29,0,14,0,0,0,28,80,0,0,0,-12,0,0,49,0,0,0,-31,-11,0,0,-5,-8,0,0,0,46,5,0,0,0,0,62,-5,-1,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,28,0,5,-3,0,0,4,0,0,64,0,-9,0,0,0,0,-15,-19,58,0,2,0,0,0,0,0,0,7,-21,-23,0,-10,-5,-3,0,0,0,0,0,37,0,0,0,-5,0,0,0,-26,0,0,0,0,0,0,0,0,0,49,0,0,0,0,0,0,-4,0,3,0,-1,1,0,0,-11,0,0,0,-8,0,0,0,-9,0,0,1,0,0,0,0,0,0,46,26,-34,-39,-26,0,0,0,-8,0,0,-5,0,0,0,-10,0,0,0,0,-13,-2,-1,0,0,54,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,11,-21,0,0,0,0,-14,0,0,31,0,0,-17,0,0,0,-10,0,0,0,0,0,0,0,11,57,40,-1,0,0,0,-17,0,0,-4,0,0,0,0,0,0,0,0,0,34,0,0,0,-19,0,0,0,0,0,0,0,-25,0,0,-3,0,0,-19,-23,0,0,0,27,54,0,0,0,0,-47,0,-4,0,0,6,0,-6,3,-15,0,0,0,19,8,-11,0,0,0,0,17,0,-9,0,0,0,0,0,8,0,0,0,0,84,-15,37,0,0,0,0,0,120,-9,0,0,0,0,0,0,0,0,0,0,0,0,68,12,0,0,0,12,0,-23,10,0,49,0,0,-14,0,0,0,-57,0,0,-25,0,0,23,0,-1,0,0,0,-17,0,0,-10,0,0,0,20,0,0,0,-4,0,13,30,-4,49,37,0,19,-1,0,11,0,0,-10,-4,0,0,0,1,0,-34,0,0,-5,0,23,13,0,-26,0,0,0,-2,13,-9,0,0,0,0,0,33,0,-3,0,0,8,0,6,0,0,0,-59,0,0,-16,0,0,0,-9,-10,22,17,0,31,-61,0,0,0,0,37,0,-15,0,0,-6,-2,0,10,0,0,0,0,0,0,26,1,0,0,0,0,0,-1,26,0,21,-14,0,0,-2,-31,0,0,0,0,5,4,0,0,0,9,0,54,0,0,0,-1,0,0,-56,-9,0,0,-3,0,0,0,20,32,83,0,10,1,-45,-4,-17,8,0,-1,0,0,0,0,0,-26,0,0,49,0,0,0,-13,0,0,-5,-12,0,0,0,0,0,-30,-3,0,0,0,13,0,0,0,21,0,0,0,-11,0,-27,0,0,37,20,23,33,0,0,0,0,0,0,0,22,0,-3,0,0,0,0,0,-3,0,-32,-7,70,0,0,0,-11,36,0,-8,0,0,0,0,-6,0,-19,19,0,0,0,0,0,-9,0,0,28,-1,0,0,0,-12,0,2,0,10,0,-14,-4,0,-5,-1,0,0,19,-11,0,0,5,0,0,0,0,0,-4,-1,-8,44,-14,0,0,11,-4,11,-3,-2,0,-1,0,0,23,0,0,-4,0,11,22,0,0,0,0,3,0,-78,0,-19,0,0,-20,0,0,0,0,0,-1,64,0,-37,44,0,37,0,0,0,0,-67,36,0,0,0,19,0,0,0,9,11,0,0,-3,0,5,0,31,0,0,0,-17,0,0,-22,0,42,-6,0,-9,0,0,-10,0,31,0,0,0,0,-13,0,0,0,0,0,0,22,0,0,0,0,0,0,30,-25,0,-15,0,0,0,0,0,6,23,0,80,1,-4,0,0,0,0,0,0,21,0,0,0,72,0,-36,0,92,0,-23,0,3,-34,0,-19,0,70,2,0,-18,0,14,28,0,-34,0,0,1,-1,0,0,5,-8,-4,15,-22,-4,-5,-16,0,-17,0,18,56,0,20,35,0,0,0,0,0,0,0,0,0,0,-40,-8,0,0,0,0,0,-2,-2,0,0,0,0,0,0,0,0,31,-24,0,0,0,0,24,-41,16,15,-4,0,0,28,0,0,0,48,98,0,-8,-2,-6,0,0,0,-13,0,0,4,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,-25,0,0,0,0,-13,-2,-9,0,0,10,-10,0,0,0,0,0,0,0,0,0,105,0,0,0,61,-5,0,39,0,38,1,46,8,0,-28,-12,0,0,0,30,0,0,-12,0,0,-4,0,0,0,15,-15,0,-7,0,0,0,0,0,-1,0,0,-1,0,0,-1,-29,6,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,0,0,0,-38,-25,5,0,-1,0,0,0,0,0,11,0,-31,0,-17,0,0,-9,0,28,0,-7,0,24,0,-12,0,16,9,-15,0,0,0,0,0,-12,0,9,0,-2,22,0,0,21,0,0,0,0,0,0,0,-18,-2,-2,0,-31,0,9,0,86,0,0,15,0,0,0,-67,-59,0,-16,-22,0,0,23,0,-2,0,0,14,0,10,0,-35,0,0,0,0,0,0,6,0,0,0,11,-3,0,-23,14,-1,-10,0,0,-12,0,-26,0,23,-6,0,11,0,-8,0,36,35,0,-8,0,0,0,0,0,40,0,0,-1,-10,0,0,0,0,0,0,15,0,-11,0,-17,0,-10,0,0,0,3,18,0,0,-1,-10,0,34,-16,3,3,0,0,-20,-9,10,0,0,-3,0,-8,0,-17,0,0,0,0,29,82,11,7,0,14,0,0,-3,55,33,0,0,10,0,0,0,-4,0,0,0,-13,-4,0,0,0,4,0,78,0,0,19,0,0,-16,-5,0,7,2,0,0,-14,0,-2,0,0,19,0,0,39,0,0,0,0,-8,28,0,-1,41,0,0,0,0,0,0,0,0,0,0,-3,30,0,-40,0,42,0,0,-24,21,0,0,-14,0,0,0,0,0,0,0,80,0,0,0,0,28,0,0,0,0,32,0,0,0,0,0,0,-19,0,-10,0,0,0,0,10,0,0,-13,-9,0,35,0,0,0,0,0,0,-17,0,0,0,0,0,8,0,0,0,5,0,0,-8,-23,-13,0,0,0,0,-1,0,46,0,-9,0,0,-16,0,-3,0,-5,0,0,0,0,0,0,-41,0,0,0,0,0,0,0,0,-10,-5,0,0,0,0,0,19,0,0,0,-19,12,-23,-30,0,0,34,14,0,-24,14,4,-1,0,0,-34,15,0,0,0,0,0,0,6,38,57,0,0,11,0,0,0,25,0,42,0,31,-62,-2,0,0,0,0,0,-5,0,0,0,3,0,0,0,-1,0,0,34,0,0,-27,0,26,0,55,-13,0,0,35,-4,-15,0,-12,13,0,0,0,0,20,-12,-8,0,0,0,0,5,-13,0,0,0,0,0,0,0,0,-4,0,-68,2,0,-18,-2,0,-4,0,0,34,0,0,-31,0,0,-27,0,0,0,0,36,0,0,-1,0,0,0,0,0,0,6,0,11,0,0,0,0,0,0,15,0,-1,0,0,0,21,0,0,-54,0,0,0,0,-8,-6,-37,0,-8,-9,-74,13,9,0,0,-3,0,0,0,0,2,-2,11,0,27,0,21,19,0,0,0,0,-1,0,-35,0,-16,0,0,0,0,0,29,0,-3,-19,0,0,0,0,0,0,0,0,0,-4,0,0,-16,0,0,0,11,0,0,0,0,-13,-36,-20,0,0,44,17,-4,-7,-75,0,0,0,0,-6,0,0,0,0,35,0,0,0,0,0,-2,0,-28,11,0,0,-2,0,0,0,0,0,0,0,-13,0,-3,0,13,-5,13,-9,-1,-38,0,0,0,0,34,-55,0,0,0,0,0,0,-2,-10,87,-11,0,-6,-9,0,11,0,0,0,-2,0,0,0,0,0,0,0,-28,7,0,0,0,-38,0,0,-17,3,0,0,0,-32,36,0,-8,0,0,0,0,24,-59,0,28,0,-5,0,0,0,0,0,-2,0,21,0,0,-2,0,0,0,0,0,0,-19,0,-17,17,0,0,-3,0,0,0,4,-20,7,0,1,0,0,0,0,0,0,0,25,12,-6,-26,0,0,-63,0,5,0,0,23,0,0,-5,-4,0,0,0,0,0,0,0,0,0,-1,0,13,6,0,-3,0,0,0,0,-1,0,0,0,0,0,0,82,0,0,-8,0,-1,0,-7,6,0,27,0,0,0,-53,0,-3,0,0,0,-30,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,37,0,0,0,0,-12,0,0,0,0,0,0,-20,-21,34,0,0,-84,13,0,11,47,-6,0,0,0,0,0,0,0,-9,0,0,0,21,41,0,0,0,0,7,0,0,8,0,0,0,0,-5,-9,-17,0,0,-25,-67,0,-3,0,0,49,0,0,0,0,0,0,0,0,5,-5,0,0,0,0,-17,32,0,0,-7,0,0,0,-14,0,-4,0,0,3,0,-49,0,-2,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-18,0,0,0,0,37,0,0,0,0,0,0,0,34,0,0,0,0,-7,14,0,0,0,0,0,3,0,11,0,0,0,0,0,8,0,0,0,0,-6,0,0,0,0,20,0,0,0,0,-10,-48,11,0,0,-3,0,0,-5,0,0,0,0,0,0,0,0,-18,0,0,0,0,38,0,0,0,40,0,0,-2,0,0,-27,0,0,-11,37,-16,-17,0,0,-8,10,-13,40,-68,0,0,0,0,3,0,0,0,0,0,-9,0,0,-67,0,-14,-9,0,0,-28,0,0,0,-11,-6,0,-14,0,0,0,0,0,0,0,0,16,0,0,0,80,0,0,0,0,49,-45,-6,0,14,0,0,-14,0,11,0,0,0,20,22,-52,0,0,-55,0,0,-8,-2,0,0,0,0,-18,0,0,0,-6,-9,0,0,0,0,0,19,0,0,-8,0,0,0,11,0,0,-24,0,0,0,-63,0,0,0,0,0,0,-6,0,-8,0,-6,-42,0,0,0,-6,0,-4,0,0,0,0,0,0,28,30,0,0,0,-22,0,25,-1,-2,-6,-9,0,-8,8,25,0,0,2,0,0,0,8,-11,-15,0,0,-2,0,-1,0,0,57,0,0,0,0,0,-4,0,0,0,0,0,0,0,17,0,24,29,0,0,0,56,-36,-12,0,25,-20,-19,0,0,0,0,0,0,0,0,0,0,-15,-42,0,0,0,-10,-2,0,0,0,0,0,-1,0,0,0,0,0,0,-2,0,0,15,0,-1,0,0,-1,0,52,-38,6,-58,0,-4,0,0,0,0,0,44,0,46,0,-1,-3,0,-33,-11,8,0,0,0,0,0,0,0,0,0,6,8,-18,-13,-1,0,0,0,0,0,0,-8,0,22,0,0,0,0,-7,-8,0,0,23,0,0,0,0,-18,0,-55,0,0,0,-6,0,0,30,28,0,-29,0,0,0,0,0,-23,0,0,0,0,0,0,0,18,-47,0,0,0,-54,0,-3,0,17,1,-8,0,-22,0,0,0,0,0,0,0,0,0,0,-3,-1,0,0,0,-4,-5,0,-37,-34,0,13,0,82,0,0,0,0,0,40,0,0,7,36,0,-19,0,0,45,-13,0,47,3,0,0,0,0,0,0,0,0,0,-14,0,15,0,35,0,-3,0,0,-18,0,0,0,2,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,0,0,0,0,-10,0,18,0,0,0,0,6,0,14,-10,0,0,0,0,0,0,0,-17,0,-9,-19,0,0,4,-32,0,0,-21,0,14,21,-15,17,0,0,0,20,0,0,-1,0,0,-6,17,0,0,0,0,0,0,0,-14,-28,0,0,0,23,-2,-12,0,0,0,0,0,0,0,0,0,-22,0,23,0,0,-5,0,0,0,0,28,4,-12,0,0,22,0,0,0,-14,16,0,-14,-19,0,0,0,0,-6,0,0,0,0,0,0,0,0,22,-38,0,0,0,0,0,0,-3,-9,-5,55,0,0,-52,-4,0,0,0,0,-8,29,0,0,14,4,45,37,0,-2,-3,0,0,30,42,0,-1,0,0,0,0,0,-2,22,0,17,0,0,0,0,0,-15,0,0,0,0,-3,0,35,-1,0,0,15,0,0,34,-51,0,0,41,-8,-3,-19,0,0,0,0,0,0,18,1,0,0,11,-50,0,0,-8,0,0,0,0,-10,0,0,0,0,0,0,33,-5,-22,0,0,0,0,-13,8,0,0,0,0,-23,0,31,0,-16,0,-6,-22,0,0,0,3,0,0,15,-12,0,0,29,-8,18,0,0,0,0,2,-16,0,0,0,0,0,0,0,0,-10,-1,-7,0,0,0,0,0,-5,44,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,56,0,0,0,-6,0,9,0,-6,-16,0,0,19,0,0,0,0,0,0,-58,-18,0,17,0,0,0,0,-45,0,0,25,-2,0,-1,0,-5,15,-10,0,0,36,0,0,0,29,1,49,0,0,0,-14,12,0,0,10,22,0,0,0,0,-14,-12,-26,0,0,-18,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,-7,15,29,2,0,11,-5,0,-2,0,0,0,0,0,0,0,0,0,0,45,14,0,21,-4,0,24,0,-19,0,0,-4,0,0,0,-4,10,0,0,-11,0,0,0,20,0,-1,0,-2,0,0,64,-15,0,25,22,0,0,-30,39,0,0,0,0,-21,0,0,-1,0,0,0,0,0,0,0,0,0,-1,-12,0,18,0,5,0,-1,0,0,0,0,-9,0,0,17,0,43,0,0,-4,0,0,-6,0,0,0,0,0,0,0,36,0,0,-7,0,0,0,0,0,0,-58,-14,-5,0,0,-6,-11,0,25,-13,0,0,0,0,0,0,0,-22,-28,0,0,-17,4,-44,-8,0,-4,0,0,-61,0,-24,-12,0,0,0,38,7,4,-21,0,0,0,0,0,0,0,0,0,0,0,-16,-23,0,21,0,0,0,-18,0,0,0,0,-3,0,1,44,0,0,0,-4,24,0,0,-17,86,0,-10,0,-4,0,0,0,-2,-18,0,0,0,5,0,0,0,0,21,0,0,0,-40,0,0,0,0,0,0,0,-13,16,0,0,-6,5,0,0,0,0,0,0,0,0,0,0,0,-6,-19,25,0,24,0,0,1,0,0,0,39,0,0,14,32,0,18,27,0,-26,-3,0,20,0,0,0,-8,0,32,55,0,-6,0,0,0,0,0,0,3,0,45,0,0,0,0,-17,0,0,0,0,0,0,-1,33,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,26,-19,-17,0,-43,-13,0,20,0,0,-19,1,0,0,20,0,0,21,27,22,-1,0,43,0,0,-25,0,30,0,0,0,0,9,-24,21,0,-40,41,0,0,0,9,0,0,16,0,0,0,0,-3,3,0,-6,0,-11,12,0,-38,0,0,0,0,-7,0,0,0,0,0,0,-9,0,0,22,-10,0,-2,0,0,-21,44,0,0,43,0,0,0,-3,0,0,0,-19,0,0,0,0,17,0,0,0,-6,0,0,37,-2,0,0,-3,36,0,-7,0,0,0,0,-24,0,0,21,27,0,29,-18,0,0,18,-5,0,0,-14,-12,0,-5,0,26,0,0,38,0,42,-1,47,0,0,3,-2,0,-6,31,0,19,0,-16,0,0,0,0,0,0,28,0,0,0,0,2,0,0,0,0,-25,-4,0,0,0,-16,0,0,0,0,-10,0,-4,0,0,29,6,14,0,0,15,0,0,-3,0,0,0,0,-20,0,3,-4,0,32,26,0,0,-2,-20,0,5,4,0,0,37,0,0,0,0,0,0,0,0,0,0,-10,-15,0,0,0,0,-4,1,42,-1,0,15,0,8,0,0,0,0,0,27,0,-4,0,0,-7,0,0,0,-9,0,0,-9,0,0,35,36,0,-24,-4,0,0,0,0,-16,2,-1,0,-4,0,0,0,0,0,0,-4,0,0,-3,0,0,0,26,18,0,0,66,0,0,0,2,0,26,13,0,-9,0,0,10,-63,0,0,41,0,3,0,0,0,-2,10,0,32,-8,0,70,0,-34,30,0,0,-61,0,2,28,-29,0,0,0,-45,-14,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-1,-16,0,0,-1,12,24,0,0,19,-5,-43,39,-1,0,0,0,0,0,42,0,-4,0,8,0,0,12,51,2,0,19,-6,23,-36,0,7,8,0,0,0,-22,0,44,0,0,0,59,0,0,0,0,9,0,0,0,0,0,12,0,0,0,2,0,0,-10,0,0,0,13,0,0,-15,0,54,-15,0,0,0,0,0,5,0,-1,-34,0,-4,-1,-6,0,0,66,0,0,0,-5,0,-19,0,0,-5,0,0,-12,37,18,0,-8,-9,-14,0,0,0,-7,34,-9,0,-14,0,0,0,0,0,0,0,0,-50,0,0,43,0,-25,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,35,0,0,26,0,0,0,-4,0,-4,0,0,-60,0,8,0,73,0,0,0,-20,-5,0,52,-22,0,0,0,0,0,0,0,0,-2,0,0,-17,0,-23,0,0,-1,0,0,3,0,-8,0,0,0,8,0,3,-6,20,0,0,0,0,0,0,-10,0,-41,26,0,0,0,0,0,0,-23,0,-5,0,0,-47,0,7,0,0,0,0,0,0,0,0,0,0,0,0,0,31,0,20,42,0,0,0,7,0,0,0,52,0,0,0,33,-23,0,0,0,54,21,0,0,-9,-14,-8,0,35,-2,0,1,0,0,0,3,0,-8,0,-1,0,0,0,0,0,0,3,0,0,0,0,0,-36,-12,0,0,-8,0,0,-6,17,23,40,0,0,0,0,0,-44,-12,0,0,-2,20,0,30,0,-4,0,0,0,0,0,0,2,0,-2,0,-44,-17,26,0,-3,0,0,0,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,-6,-7,0,0,0,0,0,10,0,-13,0,0,0,0,0,0,-15,0,0,20,0,0,3,0,0,0,-3,0,-5,13,0,11,0,0,0,0,0,-29,0,-18,-14,0,0,0,0,0,0,0,0,-95,0,-13,0,0,0,-5,0,36,-12,-4,0,0,0,0,0,0,-84,-13,0,0,0,-16,0,0,57,-18,-9,0,-4,0,0,-27,0,0,-2,0,0,0,7,0,0,23,2,0,-4,18,0,0,4,0,-6,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,-11,0,0,0,34,28,0,0,0,0,0,11,1,14,0,-17,-9,0,0,0,-10,-10,-1,0,15,0,0,0,36,0,-6,0,0,-8,0,0,-39,0,0,1,0,0,0,27,0,0,0,0,0,0,0,0,0,0,0,0,0,43,-10,0,0,-10,10,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,-30,0,-1,0,3,0,0,0,22,37,0,0,9,-11,0,0,-10,0,0,0,0,-4,0,0,0,0,0,24,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,64,-2,38,0,0,42,0,6,0,0,0,0,0,43,-18,0,0,-7,0,0,0,-11,-16,0,0,0,0,0,-4,0,-16,0,0,39,-1,0,0,0,0,0,-2,0,-19,0,-2,11,0,0,0,0,-30,0,0,7,0,0,0,-18,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,58,0,-10,31,0,-13,0,0,47,8,0,0,0,0,-1,29,-24,7,0,-9,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,9,0,-21,-15,0,0,0,0,0,0,-1,23,-2,0,0,4,0,0,-14,0,57,0,0,0,0,0,0,0,0,0,0,0,92,-5,0,0,-6,-6,0,0,0,0,0,-12,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,0,0,33,0,0,0,0,3,0,0,0,0,-3,0,0,0,32,-65,-3,16,-3,0,0,0,0,-39,0,0,15,0,45,-6,0,0,0,16,0,-10,26,-6,0,0,0,-4,0,-4,0,0,0,59,7,-15,25,-8,0,-46,-2,0,0,31,0,0,0,-19,-4,0,0,0,0,0,0,-7,7,-8,-32,-1,0,13,-8,0,-2,-15,0,0,-12,0,0,0,0,0,33,0,0,0,0,0,0,0,26,0,0,0,0,0,28,-20,0,6,-2,0,0,0,0,0,-10,0,33,-3,3,0,0,0,0,0,-4,9,-1,48,0,0,0,0,0,0,0,-18,0,-5,0,36,0,0,0,-10,0,0,18,-1,0,0,0,5,0,0,-14,20,0,1,46,0,0,0,0,0,0,0,0,5,13,-17,0,-8,0,0,0,0,-14,0,0,0,0,-6,-8,26,0,0,34,-9,-23,0,0,-4,2,0,46,0,0,0,0,-21,48,-7,-4,0,0,0,1,-16,0,0,0,55,-1,0,0,28,0,0,-12,3,0,0,0,-1,0,-2,0,61,-23,0,37,-15,-23,13,0,0,0,4,0,-10,0,0,3,0,0,14,0,-8,-6,-6,0,0,-10,0,0,23,0,30,0,0,0,33,0,0,0,0,0,31,0,18,-1,0,0,0,-7,-51,0,0,65,-4,4,0,0,-7,0,27,0,0,0,0,0,0,0,0,0,0,0,49,14,0,0,0,-2,0,0,25,0,0,0,0,0,0,-6,0,0,0,25,17,-13,-7,0,43,0,0,-7,0,0,0,0,-6,0,0,0,0,0,35,0,0,3,0,0,0,0,0,0,0,2,0,-7,14,0,-1,0,0,0,0,0,0,0,0,0,-1,0,-9,-8,0,0,0,-4,-16,-2,0,0,-11,0,0,-9,-13,-9,14,17,6,-13,0,0,0,0,0,0,0,0,13,0,0,-1,60,0,0,-9,0,0,-2,0,-5,-8,-28,0,0,-1,0,-7,0,-11,63,0,-23,0,0,23,-9,0,0,-30,0,0,-1,0,42,0,0,0,-8,-2,-8,0,0,0,0,0,0,0,45,24,-11,0,0,0,31,0,0,0,-21,0,0,8,0,0,0,0,-9,0,0,-4,8,0,0,0,-68,0,0,0,-17,-81,0,0,0,-8,0,-20,52,-8,45,0,0,0,0,10,0,-1,0,1,0,-9,-28,0,0,79,20,0,-16,0,0,-27,0,-2,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,-18,0,0,0,0,-12,-10,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,-2,0,-16,0,0,0,-15,0,0,6,-7,-16,0,0,0,0,-6,0,41,-18,30,0,0,5,33,0,-38,0,0,-26,0,-31,0,0,33,0,-5,0,0,45,0,0,0,21,8,0,0,0,0,-8,0,0,0,0,0,0,2,-2,0,0,0,0,0,0,0,0,0,0,58,0,-4,13,0,-3,0,0,26,-4,0,0,0,-10,0,0,0,13,0,0,42,-18,13,0,34,0,-2,-42,0,0,0,0,48,0,0,0,-6,0,0,0,-52,0,-30,0,0,0,0,14,59,27,0,0,3,0,-4,0,0,-7,0,-19,0,36,0,0,29,49,0,0,0,13,0,0,-17,0,89,0,31,0,-11,0,0,0,0,20,0,0,0,0,0,27,0,10,0,-8,0,0,0,0,0,-21,0,30,30,0,0,0,9,0,0,31,0,-9,0,6,32,0,0,0,0,0,0,0,11,14,0,0,0,0,39,46,-31,14,8,-41,13,0,0,0,0,-13,0,0,0,0,0,-18,-18,0,0,-30,-26,0,0,0,22,-3,-11,0,0,-7,11,0,0,0,0,0,0,18,41,0,-10,15,1,34,0,0,16,0,0,0,0,0,0,0,0,-56,0,0,0,0,0,0,0,13,0,0,0,0,0,0,0,0,0,0,38,47,0,0,0,0,23,0,0,0,4,-10,0,0,0,0,0,0,0,17,0,0,0,0,0,0,0,-8,0,0,29,0,-44,0,0,0,28,3,0,0,0,-3,0,0,0,0,0,12,0,0,0,41,0,-39,-10,0,0,17,0,0,-12,0,-16,0,0,11,0,5,-6,0,0,0,0,0,0,-4,0,0,0,37,11,0,0,0,0,0,-5,0,0,27,0,0,0,0,0,0,0,0,0,27,0,-1,-32,0,0,0,0,0,0,-2,-12,0,0,0,0,47,0,-25,20,0,-6,-7,0,-35,0,0,-37,0,-12,0,0,0,0,0,-5,0,0,0,-5,-2,0,7,0,47,0,-17,-10,25,0,0,0,0,1,0,42,-8,0,0,-5,13,0,0,49,0,0,0,0,12,0,0,0,0,0,0,0,0,-11,0,27,0,0,-8,-4,0,-1,-23,0,-7,0,0,0,10,0,0,-23,13,-7,0,0,0,0,0,0,0,0,0,0,0,-1,0,16,42,0,0,0,12,0,0,25,3,-1,0,-1,52,0,0,0,0,-7,0,0,0,26,0,0,0,0,72,0,0,60,0,0,0,0,-25,0,0,0,-7,0,27,0,0,-40,-5,39,0,0,-13,0,47,0,-1,0,0,0,0,0,0,0,0,0,0,0,-26,25,0,0,0,0,0,26,0,0,0,0,-11,0,0,0,27,0,0,1,0,-14,0,0,0,20,0,0,0,0,0,0,6,0,-15,0,0,0,0,29,0,0,-5,0,10,-3,0,-1,9,0,0,49,-2,-2,0,0,-38,59,0,0,0,0,0,0,0,0,0,0,18,0,0,0,0,0,20,-9,0,0,0,-29,0,0,0,28,0,-12,0,0,0,0,35,0,39,-7,0,0,24,0,59,0,17,0,20,48,0,0,10,0,0,0,6,0,10,0,19,0,0,0,0,43,0,0,67,-6,88,0,-34,0,-26,0,0,0,0,5,0,18,-18,-20,68,0,-23,7,0,0,0,0,0,0,-37,0,0,0,-1,0,0,0,7,49,0,0,0,-21,36,-2,0,0,-13,0,0,-14,0,0,-7,0,0,-8,0,-19,-1,-7,0,0,0,-14,0,0,0,0,0,-8,0,0,0,-34,0,0,0,0,-3,0,-13,0,-8,6,-3,0,0,0,0,-24,0,-1,0,0,28,0,0,-4,0,0,0,0,0,24,0,0,0,0,0,-8,0,0,0,0,0,41,0,3,-7,0,13,0,0,0,0,0,0,29,0,0,-3,-2,0,27,0,-5,0,0,0,0,0,-3,-10,0,0,-5,0,0,0,0,0,0,47,0,0,0,0,0,1,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,34,-13,0,11,-6,0,0,0,-6,0,-2,0,33,0,0,0,-4,0,0,0,0,3,29,0,0,0,0,0,0,0,0,-2,0,0,13,0,0,-6,0,0,30,-20,0,0,0,0,-9,-14,-4,-11,-52,0,-1,8,2,0,8,11,0,0,0,0,0,0,0,-71,0,0,-15,0,0,0,10,13,0,0,0,0,-5,0,0,0,-19,-8,0,-3,-3,0,0,0,30,0,0,0,-8,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,35,0,0,0,0,-3,0,-7,0,0,49,0,0,0,0,-16,3,-1,0,0,0,0,-17,0,0,0,9,-10,35,0,25,-42,0,7,0,0,4,-1,0,0,0,0,0,0,6,24,0,-39,0,-18,0,0,0,0,4,33,0,0,0,0,0,-4,0,0,-9,-21,15,0,0,-21,0,-1,0,0,0,0,0,26,-19,-9,0,0,0,38,0,0,0,0,-1,26,-6,0,-5,0,-3,24,0,0,0,0,0,0,13,0,0,0,0,0,0,-23,4,0,0,0,0,37,-2,-78,0,0,0,-57,0,0,0,3,-14,0,0,-37,-10,12,0,-13,14,0,0,0,-18,0,0,0,0,13,-6,-39,0,0,0,0,22,6,0,1,0,0,0,0,0,0,0,3,-1,0,0,-19,0,0,0,0,0,0,0,0,0,0,-49,0,4,0,0,0,0,0,0,0,40,0,-9,0,0,0,-60,-2,0,-11,24,0,0,16,0,0,-38,0,0,0,-55,0,0,0,0,-4,0,0,-8,0,0,0,0,0,0,0,0,0,-22,-59,0,0,0,0,0,0,0,-63,-24,0,0,-5,0,0,18,12,-7,0,0,-4,0,-2,-46,0,43,17,-38,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-17,37,-8,12,0,0,0,0,0,0,0,0,0,0,0,49,19,0,0,0,0,0,0,0,0,0,0,0,23,0,0,48,0,-3,14,0,0,0,0,0,0,0,0,0,0,6,-12,0,20,2,0,6,-3,13,65,0,0,0,0,0,0,0,0,2,54,0,0,0,13,0,-5,0,-2,-4,0,0,0,0,0,40,0,0,0,0,0,0,0,61,-37,35,0,0,0,-10,45,0,-22,0,0,-16,0,12,0,0,17,54,11,0,-10,0,0,0,0,0,0,0,0,-47,0,0,-43,0,-19,0,0,0,0,-1,0,0,-18,-19,-16,0,39,19,0,0,0,0,0,0,0,5,-25,0,30,0,0,0,0,-9,-19,0,31,0,9,0,0,14,3,0,0,0,25,11,0,0,11,0,0,-1,0,51,0,0,0,0,0,-2,0,0,0,0,-9,48,21,0,-8,0,0,-24,19,0,-2,0,0,0,0,-3,-60,0,2,-14,1,24,0,-11,-4,54,0,20,0,12,0,31,-5,37,0,-26,0,0,-13,0,0,0,0,-63,-42,0,0,0,-2,0,0,0,0,-9,0,0,-4,1,25,-29,0,0,7,0,0,0,0,14,0,12,3,0,5,0,0,0,0,35,0,0,0,13,-7,0,28,0,0,9,30,-8,46,0,36,0,0,0,0,0,0,0,0,0,0,0,21,0,-72,-16,-31,-6,-10,0,0,0,-4,0,62,0,18,0,12,0,-4,0,0,0,-36,0,0,0,0,0,0,0,0,0,-41,0,0,-2,-3,5,-3,0,-2,23,-33,0,-1,0,0,0,0,12,0,36,0,0,0,18,0,24,14,0,0,0,0,9,-6,-46,0,0,0,-7,40,0,0,53,0,0,0,0,0,-1,0,57,0,0,0,0,-2,-36,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,5,4,1,0,17,0,0,0,1,0,21,0,0,0,0,0,-7,-12,33,0,0,0,0,0,-2,0,0,0,-36,0,0,-45,16,0,0,0,10,0,20,0,-9,0,0,0,-2,-31,30,0,0,0,0,-1,0,0,0,-18,0,0,0,15,0,10,0,0,0,0,0,-11,-25,0,0,0,-3,0,0,0,0,-5,16,0,0,17,-3,0,-6,0,0,-46,0,0,0,0,-7,-16,0,0,2,0,0,0,0,0,0,0,0,0,0,0,-6,-1,0,1,11,-33,0,0,-28,0,24,0,0,-2,0,0,0,0,-10,13,0,-17,20,0,30,0,0,0,0,-2,0,0,3,0,-7,0,0,0,-3,0,0,16,0,-5,0,33,0,0,51,0,0,-38,0,21,26,1,2,0,0,0,0,0,-20,0,0,-15,0,0,27,0,0,0,-1,-54,0,0,0,0,-25,0,0,9,-1,-5,34,0,0,-9,-15,0,-4,0,24,0,0,4,-3,8,0,0,0,0,0,0,0,0,0,0,0,0,33,0,0,0,28,0,0,0,0,65,0,0,0,-10,0,0,0,73,0,-4,28,5,0,11,-22,0,0,0,0,0,0,0,0,0,28,-9,0,0,-40,0,-16,-4,0,-35,0,0,-2,0,0,0,0,-68,0,0,59,2,0,0,0,27,-13,0,0,0,-25,29,0,0,0,0,0,0,-5,0,-28,0,22,0,-2,0,21,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,0,-1,67,-51,0,26,-3,0,0,-3,0,0,0,0,0,0,0,-33,0,9,0,5,0,-10,65,0,-21,0,0,-2,31,-21,9,0,14,0,14,0,0,0,0,-40,-41,0,0,0,8,0,0,0,0,38,0,0,0,0,0,0,0,0,-1,0,0,-2,28,0,15,0,0,0,0,31,0,0,0,0,0,0,56,0,0,-36,0,0,0,0,0,0,0,-5,-2,32,0,0,0,0,0,0,0,0,47,0,85,0,14,41,0,0,0,-3,0,0,-5,-56,-2,18,0,45,0,0,3,0,0,35,0,0,13,6,-11,-16,0,0,-17,0,0,0,0,-8,0,0,0,0,0,0,0,-2,0,0,-17,0,0,16,0,0,5,14,0,0,0,0,0,13,-16,0,0,-45,0,0,-2,0,-2,-5,35,25,0,0,0,0,0,-7,0,0,-1,0,0,14,0,0,11,-13,0,0,0,0,0,0,0,14,0,0,0,0,0,0,0,0,-14,-82,2,15,1,0,0,0,16,52,0,-11,-3,0,-4,-56,0,5,10,0,0,0,0,44,-3,0,0,-37,0,0,0,0,0,0,0,-41,0,0,0,0,19,-11,0,0,0,0,0,0,0,5,0,0,0,0,0,15,0,0,0,-1,0,40,29,0,0,0,0,0,0,0,0,0,30,0,0,4,-14,0,0,0,26,0,28,-26,0,0,0,0,-18,0,0,0,-10,2,12,0,0,0,-2,0,-26,1,0,0,-11,0,0,0,25,0,-4,17,-8,0,0,-22,31,0,-10,27,0,0,0,19,0,0,0,0,0,0,1,-3,1,-80,0,-3,49,-2,0,-4,0,19,0,0,0,0,0,0,0,0,0,0,2,16,-1,0,0,0,0,38,-18,0,28,0,0,0,0,10,0,-17,0,0,0,0,0,0,-27,0,0,0,-11,0,-23,0,0,0,0,0,-8,0,0,0,-8,0,61,0,0,0,0,0,0,0,0,0,0,-2,-8,0,-8,0,26,24,7,0,1,-11,0,0,0,0,-25,15,8,46,0,60,0,0,-5,-4,46,0,0,0,0,0,0,7,52,0,0,0,14,0,39,0,0,0,0,0,0,0,0,0,0,-2,0,-12,12,0,0,-3,0,0,0,0,0,0,-13,0,0,0,0,6,0,41,0,-9,0,49,0,15,0,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,13,0,0,0,-18,0,0,15,0,0,14,0,0,-13,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,-1,-27,-5,-12,0,0,-4,-35,0,0,0,5,9,0,-7,-16,0,0,0,0,0,0,-27,-30,56,0,0,0,0,-3,0,0,0,-12,0,0,0,0,-1,-23,44,0,20,0,0,0,0,-8,-17,0,0,0,1,0,0,0,0,3,15,0,0,0,0,28,0,28,0,26,25,0,0,0,0,0,-44,0,0,-11,0,0,3,0,0,22,0,-9,0,0,0,0,0,0,0,-45,-23,17,0,-24,0,0,0,0,15,18,0,-9,0,0,-9,0,-56,0,0,0,-3,5,0,0,13,0,0,0,0,0,0,0,16,0,0,0,0,0,0,7,0,-15,0,0,2,0,-1,0,-79,0,0,11,0,0,0,61,10,0,32,0,-9,0,0,0,27,0,0,0,5,-5,0,0,0,0,0,0,0,0,0,0,0,15,0,0,26,0,0,0,0,0,-5,47,0,0,0,0,-4,0,-19,-61,0,-7,5,31,-11,0,0,0,0,0,0,0,0,81,-13,0,0,0,0,0,0,-3,0,0,35,21,2,26,0,0,0,-15,0,0,2,0,0,-20,0,0,0,23,32,0,-4,-2,83,0,0,0,-6,13,0,0,0,0,-31,-26,0,0,0,6,0,0,0,10,0,0,0,13,0,0,13,0,0,-31,0,-3,-1,16,0,0,0,0,0,0,-8,0,0,0,0,0,-20,0,0,-24,-1,-16,14,0,-9,0,-15,-13,0,0,-1,76,-9,0,-5,-2,-11,0,0,-10,0,0,38,-15,0,0,35,0,0,0,12,0,0,0,0,0,-3,53,0,0,13,0,0,0,0,0,0,-16,0,0,-8,0,16,0,21,0,0,-27,8,0,0,0,19,0,20,0,0,0,0,0,-90,0,0,0,12,0,22,-6,0,0,0,6,0,-61,0,-7,0,0,19,0,0,5,0,-5,0,0,28,0,0,-7,-11,0,0,0,-12,54,0,0,7,0,0,0,4,0,72,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,3,0,0,0,0,0,0,0,-5,55,0,0,0,0,0,0,0,0,0,0,-9,-53,0,56,43,0,0,-2,-15,0,0,0,0,0,-4,-5,-19,0,6,0,0,-48,0,-6,0,-2,0,0,0,0,0,0,0,0,0,0,64,0,50,-14,0,0,-54,0,0,0,0,16,-6,0,0,0,15,21,0,10,0,0,27,0,36,0,4,-8,89,21,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,-9,0,-12,0,0,0,42,14,0,0,0,0,0,-1,0,15,-13,0,0,-15,13,0,-2,5,-27,0,0,0,0,0,-13,-1,0,-19,0,-29,0,0,0,-7,0,0,20,0,-12,-4,0,0,0,-6,0,-18,0,0,14,0,0,0,-31,0,0,0,41,-21,42,9,0,0,-39,0,0,22,0,0,32,0,26,0,0,0,0,0,15,0,0,-48,0,0,0,-29,0,0,17,0,20,0,0,0,0,0,38,4,0,-10,0,0,19,0,42,0,0,0,0,0,-4,0,-3,0,0,0,-11,0,0,0,-1,0,0,-2,0,0,0,-7,-23,0,0,0,6,0,0,0,0,0,0,0,0,0,-9,44,0,0,0,0,0,29,0,-34,-6,14,0,0,0,0,0,7,0,0,0,0,-2,0,21,44,0,0,0,0,16,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,17,0,0,-9,0,0,0,-23,0,0,0,0,0,0,0,48,0,-44,0,0,0,0,-12,4,0,-9,0,0,0,0,0,0,-6,-16,0,-17,-3,31,0,50,0,-3,0,-12,-6,0,0,0,0,0,0,0,-9,0,0,0,-1,0,-6,0,0,0,0,0,0,-3,-32,23,0,0,55,0,0,0,0,0,0,0,3,0,-41,29,0,22,-5,52,0,0,65,0,0,0,24,0,0,0,-11,42,0,0,0,-7,0,0,0,0,13,40,-18,0,-6,0,-6,0,0,34,0,25,23,-2,0,-1,2,0,-5,0,0,0,0,0,-45,0,-1,0,-37,0,0,0,0,0,0,-4,0,0,-24,0,0,19,0,0,-18,0,0,0,-22,-1,2,-40,0,0,0,0,0,3,0,0,3,0,-8,0,0,0,0,0,0,0,-5,11,0,0,5,15,0,0,8,64,0,0,-9,0,0,0,-31,-3,0,26,-14,0,0,0,0,38,0,0,-9,-33,-10,0,0,0,10,37,-7,-2,0,0,0,-4,0,0,-22,0,0,-20,0,7,0,0,0,-12,0,0,28,0,0,0,0,-25,-12,0,0,0,0,0,0,0,0,-19,0,0,0,54,0,0,0,13,0,0,0,24,0,0,0,6,0,0,0,0,49,47,0,0,0,0,-2,0,0,0,-1,54,-2,0,-15,0,-10,-1,3,0,0,-22,0,0,0,30,-55,-6,0,0,-1,0,-3,0,-1,0,0,0,0,2,0,2,0,0,0,-11,0,0,16,0,6,0,-21,-18,0,-1,-1,-12,0,-4,0,10,0,41,0,0,0,0,0,0,-2,0,0,0,0,0,36,29,0,38,0,0,0,0,0,-3,0,-31,2,-3,7,0,0,0,0,0,0,2,0,0,0,0,0,0,15,19,0,0,34,0,-2,8,0,0,0,0,-34,0,0,0,0,0,0,0,0,0,-9,0,34,-8,0,7,0,0,-16,-4,-1,37,10,43,0,0,64,1,0,-52,0,10,37,-23,-14,0,0,0,0,0,0,-9,-1,0,0,0,17,2,0,-3,43,48,0,12,0,0,-4,-15,0,31,0,-22,0,0,-20,0,0,0,-39,0,0,-14,0,-1,0,0,45,0,-3,0,0,0,0,8,-19,0,0,0,0,19,2,0,0,0,0,18,-20,-16,0,0,0,-22,0,0,0,0,-1,0,-13,0,18,0,0,-21,0,43,0,0,0,0,0,44,0,0,0,0,0,0,0,0,0,0,-16,0,0,14,0,0,0,0,0,30,0,0,5,0,0,0,0,-26,0,0,0,0,0,0,0,2,0,0,0,0,0,-16,0,0,0,0,26,0,0,0,0,-1,0,0,0,-26,0,0,0,0,33,-7,15,49,0,0,0,2,-1,0,0,0,20,0,0,-8,0,-6,0,-10,0,-8,-6,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,27,0,-16,0,0,0,0,0,24,-14,0,0,0,10,0,0,-15,0,0,0,-32,-4,0,-6,28,21,0,0,-33,0,0,0,42,0,35,0,0,0,0,-36,0,0,6,0,10,0,0,-20,0,0,0,0,0,-8,0,-67,0,0,0,0,0,0,27,0,0,0,-9,-1,0,-1,36,0,0,0,127,0,0,15,-11,0,-18,0,0,0,-2,0,0,0,0,0,-2,0,0,0,0,0,-6,0,28,0,-2,0,0,-10,0,2,0,24,-13,0,-15,0,-8,-14,-2,35,6,0,-15,-33,0,0,-9,0,0,0,-3,0,0,0,-16,44,0,-13,0,-11,0,0,0,0,0,-5,0,-12,0,5,0,0,-2,23,0,0,-2,0,0,63,-27,-14,0,-1,0,33,-7,0,0,-7,0,0,0,26,0,-2,5,0,0,5,0,0,0,0,0,-6,0,0,-8,-1,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,39,-2,-3,0,0,0,0,0,0,53,0,0,7,0,-10,0,0,0,10,-7,-20,0,0,0,0,0,16,0,-1,-13,-8,0,0,0,0,0,0,0,0,-5,63,0,0,-10,0,0,0,0,0,39,4,-11,0,-11,-9,0,0,0,0,-6,5,0,-51,-16,0,0,0,0,0,0,0,0,12,0,0,50,0,0,0,18,0,25,0,0,0,0,0,0,0,0,0,20,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,36,0,0,-9,0,0,0,-15,-4,-6,0,0,0,0,0,-18,0,0,-1,0,0,0,0,0,0,0,0,8,0,82,0,0,0,27,-35,0,-26,0,0,-6,0,1,0,35,0,0,0,0,11,0,0,0,0,14,0,0,0,0,0,0,0,0,0,0,48,0,0,0,0,0,-7,0,0,-22,0,3,0,0,46,0,0,0,0,0,0,0,0,0,0,0,0,0,47,27,-1,0,0,0,0,0,0,0,0,-26,0,-1,0,7,3,0,0,-6,-16,0,0,-19,0,0,19,-3,0,-5,0,0,-12,-2,0,-42,0,-7,0,0,0,0,0,15,0,0,0,-19,-22,10,0,-8,0,0,12,0,0,0,-6,0,0,0,0,27,0,0,48,0,-5,0,0,-16,0,0,0,0,0,-5,0,0,0,-9,0,0,0,0,17,0,-15,-16,-1,0,0,0,0,0,3,0,0,-11,44,23,0,0,0,0,-1,0,15,0,0,0,0,0,-22,7,10,0,0,0,-3,17,-4,6,-2,0,0,0,0,40,0,-14,20,26,0,0,0,0,0,0,0,5,0,-12,0,0,-9,0,1,0,12,0,0,0,0,4,6,0,0,0,17,0,-4,-41,0,-2,0,0,35,0,26,0,0,0,0,5,-11,20,0,0,0,0,-8,0,-3,0,0,0,0,0,0,0,0,0,0,0,-48,0,-1,22,-72,0,-35,0,0,0,0,0,0,-34,22,0,0,0,-2,0,0,0,-12,0,0,37,-3,8,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,0,0,0,0,0,0,0,0,-5,0,0,0,0,-4,0,0,0,-15,0,-16,0,47,0,0,0,0,-17,60,89,24,0,0,0,-2,0,0,0,0,0,0,19,0,17,0,12,19,0,0,0,0,0,43,0,2,0,0,0,-4,0,0,0,11,0,0,0,0,25,0,18,0,0,0,0,-9,0,-3,0,-10,0,0,0,0,0,0,0,0,0,0,-17,11,0,0,0,0,0,0,0,5,7,-17,0,0,42,0,0,0,-51,0,0,0,0,0,0,0,0,0,0,-8,-41,0,0,-12,0,28,0,0,0,0,27,0,-30,0,-4,0,0,-19,0,20,3,0,-20,-1,0,-19,0,4,9,0,0,0,0,9,27,0,0,37,-5,0,0,17,0,0,0,-4,0,-13,0,0,-51,0,83,0,13,0,25,0,0,-1,0,-10,-10,0,-11,0,0,0,0,-15,0,15,0,0,-13,0,0,0,0,-12,-17,0,0,0,32,0,0,-3,0,-30,0,0,0,0,0,-4,30,0,-3,0,0,0,0,-11,0,0,0,0,-20,-1,0,-7,0,0,0,-2,3,-46,0,0,0,-28,0,34,0,29,0,15,-4,0,-65,0,0,-1,0,0,0,0,-4,-24,0,0,0,-1,-13,53,0,-9,0,0,9,28,0,0,14,41,0,0,0,0,0,41,0,0,17,-3,0,0,28,0,0,0,0,0,-31,-9,47,0,0,0,14,0,0,-10,14,-26,0,-5,53,0,0,0,0,20,0,0,0,0,-9,32,0,-2,54,0,-6,-9,-20,0,1,0,-1,14,0,0,-10,0,-4,0,0,20,0,-12,0,0,14,0,-3,0,-27,20,0,0,0,-16,-13,0,0,-2,0,0,0,0,0,0,28,0,0,0,0,0,36,0,0,0,10,0,0,-14,-18,-25,0,-28,0,0,14,-1,-1,0,0,0,-4,14,0,0,0,0,32,0,0,0,-6,0,-1,25,0,0,0,5,-11,0,0,0,53,3,0,3,0,0,71,0,-18,0,-10,71,-38,0,0,0,0,45,0,10,0,17,-4,0,0,0,0,-26,-9,0,0,0,0,5,11,0,0,0,1,0,10,0,0,0,2,0,0,24,0,30,0,0,0,0,-4,0,2,0,0,0,0,0,0,0,0,0,5,0,0,-6,0,-6,0,0,0,0,0,-6,-35,0,0,-4,-2,0,0,0,-26,0,0,0,0,21,0,0,62,0,40,-10,0,0,-19,26,0,0,14,0,-7,0,-37,0,-10,0,43,29,0,19,0,-27,0,0,0,-11,-4,0,52,0,0,10,0,0,-1,0,1,-9,0,0,0,0,8,0,0,0,0,43,10,-3,-1,0,0,0,0,0,0,0,-5,0,-11,-13,0,0,-8,4,25,0,0,0,-13,44,1,0,-19,0,0,0,-12,0,0,0,58,0,0,-5,-17,34,2,-14,0,21,0,0,0,0,-75,0,12,0,0,-2,0,0,2,0,0,0,-12,0,0,-3,0,-13,0,78,0,0,0,5,-1,0,0,-12,58,0,32,-3,-11,0,-17,-1,2,35,22,0,0,47,-6,0,0,0,-63,8,0,61,0,0,0,0,18,0,0,0,0,0,0,8,23,-9,0,-59,21,17,0,0,0,-24,40,16,46,0,4,0,-29,0,-3,-7,0,22,-16,0,0,0,0,-1,0,0,40,0,-6,29,0,0,0,0,45,0,0,0,-11,0,0,-1,0,0,-5,50,0,0,0,0,0,0,4,5,0,0,0,0,0,-10,-3,0,0,0,-12,-2,0,0,0,0,0,-11,0,0,0,0,0,0,0,28,0,8,0,-11,0,-3,-20,0,0,0,0,0,0,0,0,0,-10,37,0,0,0,0,-22,46,0,64,0,0,0,0,-20,14,39,0,29,-10,0,0,0,-13,-30,-12,0,14,52,0,0,0,0,0,0,49,0,43,0,0,0,0,-3,0,-8,0,0,-1,0,0,0,0,0,0,15,0,0,0,0,0,0,0,0,0,0,1,33,0,0,0,0,-1,0,0,17,0,0,0,0,0,0,-6,-1,-14,0,0,4,0,0,0,0,0,0,86,0,0,0,33,0,0,-10,0,0,0,85,-31,18,0,-5,0,-9,0,0,12,0,-2,0,0,0,-5,0,0,0,0,12,0,0,0,0,0,0,0,0,0,0,0,-16,0,-5,-14,0,0,15,0,6,33,0,0,0,2,0,-11,0,0,0,0,0,0,-2,0,0,0,0,0,32,0,-17,-5,18,0,0,-2,0,0,-2,0,0,0,0,0,0,0,0,-13,0,0,0,-10,0,10,65,18,0,-30,0,32,0,0,-9,0,-14,0,0,0,0,-17,0,-63,33,-42,0,0,0,0,-11,0,0,1,0,0,0,0,0,0,0,-28,0,0,13,-1,0,0,0,10,0,0,0,16,0,0,0,0,0,14,0,-21,0,0,0,0,-3,57,0,0,0,-2,38,-1,0,0,20,0,0,0,0,-28,0,0,0,-1,-37,0,0,40,-9,0,0,0,-4,0,-5,0,0,0,0,0,0,14,0,0,0,0,0,0,0,0,0,-5,27,19,0,10,12,0,0,-18,-1,0,-7,0,0,2,0,0,0,0,0,0,-3,3,5,0,0,0,-7,0,-18,0,0,0,0,0,0,20,0,0,0,-7,0,0,0,23,-10,0,0,-3,0,0,-16,0,0,-11,-9,-12,0,0,0,-4,11,18,0,-10,-2,0,0,-2,0,0,0,0,-3,0,0,0,-28,0,-31,-5,-23,0,0,0,0,0,0,0,0,-24,-5,43,0,0,0,-61,0,0,0,0,0,-4,0,0,-3,0,-10,-9,0,2,0,0,0,0,0,-18,0,0,0,0,0,0,26,48,0,0,-23,0,0,0,0,-23,-18,0,-2,0,0,0,-6,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,43,-4,0,-64,0,0,-9,0,7,0,0,0,0,-8,0,0,6,0,27,0,-40,0,0,-3,0,0,0,36,35,0,-3,0,0,0,0,0,0,-8,0,-17,-3,0,0,0,0,0,0,59,63,0,-18,-1,0,0,0,0,58,0,0,0,71,0,33,51,0,-49,-7,0,0,0,0,0,57,0,-8,0,-9,-29,0,-8,-23,21,-7,0,0,0,29,0,-6,0,-25,0,0,-7,5,0,-15,0,7,0,0,0,-2,0,0,-40,0,10,0,3,0,0,0,0,-9,0,0,3,0,-2,0,-6,-9,-4,0,0,32,6,28,0,0,0,-4,0,0,8,0,0,0,0,15,0,0,0,0,-9,0,25,-1,36,51,0,9,-9,-14,0,0,2,0,0,0,0,33,0,0,0,65,5,0,0,0,-1,0,0,0,0,0,0,-4,0,0,-5,0,0,0,12,0,16,0,0,0,0,0,0,-5,0,11,-3,0,-5,-5,0,-46,0,0,0,0,0,26,0,10,0,0,0,0,0,0,-1,0,35,0,0,2,-35,0,0,-26,-6,0,-6,0,0,30,0,-3,-37,0,0,0,0,0,0,0,-2,-1,-9,0,0,0,-1,-3,53,-13,-1,0,0,16,0,1,0,0,0,0,0,10,24,-6,0,16,-9,0,-3,0,0,-33,-30,2,0,0,0,-12,41,0,-12,0,7,0,0,-15,-1,0,0,0,0,18,0,-19,0,0,0,-44,0,-18,0,0,-13,0,6,0,0,-3,0,0,0,31,0,3,-3,0,0,0,0,0,0,0,0,-13,-16,0,0,-69,0,-1,-11,67,-5,10,0,-4,0,0,0,0,0,51,-32,-1,8,-7,0,-23,0,0,0,1,0,-12,4,9,0,-9,0,0,0,-3,0,0,14,0,0,0,0,-16,0,0,-80,14,0,0,71,0,0,-8,32,-15,0,-32,0,0,0,0,0,0,0,0,-2,0,31,-16,7,0,18,0,15,0,0,0,11,0,0,6,0,49,-13,0,0,-5,-15,0,0,20,0,0,0,0,0,-2,0,0,-10,-40,0,-12,0,0,-36,0,0,47,0,0,0,0,-11,35,-4,0,0,0,0,0,0,0,26,0,0,-38,0,0,0,0,0,0,40,1,-18,-2,0,27,0,43,-3,0,0,21,8,1,-3,0,0,19,0,0,-9,0,36,0,0,14,0,0,-8,55,-1,0,10,0,0,0,0,-8,0,0,-3,0,0,0,0,-2,0,-32,0,0,0,-13,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-10,0,5,-4,-9,15,-10,-8,0,0,0,0,37,0,40,-22,0,0,0,0,0,-4,0,0,0,6,0,-23,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,0,-24,0,-30,0,0,-7,32,0,0,0,0,0,-18,0,-10,-2,11,0,0,0,0,0,0,0,9,24,0,-25,0,10,0,0,84,0,52,9,0,0,-9,0,0,0,0,0,58,0,1,39,-19,0,0,0,0,0,0,-30,0,0,0,0,0,0,0,-1,0,0,0,0,0,72,0,0,0,0,19,14,0,-3,-4,0,0,-68,0,0,-3,9,0,-8,0,0,0,0,0,0,0,29,0,0,-14,0,-4,0,0,-55,0,9,0,0,0,0,0,0,0,0,0,-16,2,0,-6,0,0,21,-1,0,-14,0,0,-24,-59,6,0,0,0,0,-8,0,-22,54,0,0,-32,-3,0,-17,0,0,26,0,0,-5,15,0,0,0,0,-7,0,0,0,0,0,-20,42,0,0,0,-38,22,4,0,0,0,-14,0,24,0,0,0,-14,0,0,34,23,0,0,0,-4,30,0,-6,11,0,-18,0,0,0,0,-21,0,0,0,0,0,18,0,-45,0,0,0,0,-6,-33,0,17,0,0,0,0,34,-17,0,0,0,0,0,-35,0,7,0,-3,70,0,0,0,0,0,20,0,-8,0"
@@ -12,5 +676,631 @@ var MODEL_SMALLTALK = "b:1.325805856011327;s:0.03601373798297529;w:65,30,0,0,0,0
 var MODEL_META = "b:-2.8305404406007386;s:0.059466725844542184;w:-9,-1,0,0,0,0,-9,0,-9,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-3,0,0,0,-21,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,-6,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,-4,0,0,0,-2,0,0,-9,0,0,0,0,0,-3,0,0,0,-1,0,0,0,-1,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,-3,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,-4,0,0,-3,0,0,0,0,0,-1,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-12,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,-4,0,0,0,0,-13,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-18,0,0,0,0,-1,0,-1,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,-1,-1,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,-2,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-2,0,0,0,0,-15,0,0,0,-1,0,0,-6,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-6,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,0,52,-6,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-22,-40,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-4,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-1,0,-1,0,0,0,0,0,-1,0,0,0,116,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-14,0,-3,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-9,-1,0,0,-3,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,-1,-11,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-19,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-18,-3,0,-1,-3,0,0,-14,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-7,-2,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,-26,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,-1,0,-15,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-4,-1,0,-17,-22,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-6,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,115,0,-1,0,0,116,-8,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-2,-2,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-1,0,-1,-2,0,0,-2,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,-2,0,0,0,0,-14,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-2,0,0,0,-3,0,0,-12,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-12,0,0,-4,0,0,0,0,0,0,0,-1,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-8,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,-6,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,-2,0,-8,-1,-14,-1,0,0,0,0,0,0,0,0,-6,0,0,0,0,-1,0,0,0,0,0,-13,0,0,-1,0,0,0,0,0,0,0,0,0,0,-11,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,114,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,-13,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-3,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,115,0,0,0,0,0,0,-1,0,-10,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-1,-4,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-15,0,0,0,-1,-4,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,-18,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-9,0,0,0,-6,0,0,0,-15,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,-1,0,0,0,0,0,0,0,-23,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-22,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,-6,-1,0,0,0,0,0,0,0,116,0,0,0,0,0,0,0,0,0,113,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-11,0,0,0,-14,0,0,0,-1,-1,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,-2,-20,0,0,0,-10,-1,0,0,-1,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,-1,0,-1,-3,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,-2,0,0,0,-5,0,0,-3,0,0,0,0,0,0,0,0,112,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-10,0,0,0,0,0,0,-1,0,0,0,-4,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,-2,0,0,0,0,-7,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-16,0,0,0,0,-1,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-4,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-10,0,0,0,0,-4,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-1,0,-1,0,0,-12,0,0,0,0,0,0,0,0,0,-2,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-8,0,-24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,-6,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-10,0,-1,-17,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,-1,-4,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,-1,-4,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,0,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-5,0,0,0,-11,0,0,0,0,0,0,-1,0,0,-13,0,0,0,-1,0,0,0,0,-38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-6,-5,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-5,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,-11,0,0,-1,0,0,0,0,0,0,0,-10,0,0,0,0,-5,0,0,0,0,0,-1,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,118,0,0,0,0,0,0,0,0,-12,0,108,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,115,0,-1,0,0,0,0,0,-2,0,0,0,0,-17,0,0,0,0,0,0,0,0,-1,0,0,-1,0,-6,0,0,0,0,-49,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-5,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-16,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-9,0,0,-1,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-21,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,-1,0,0,-31,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,-1,0,0,-1,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-37,0,0,0,0,0,0,0,0,0,-1,0,0,-11,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,-1,117,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-12,0,-2,0,0,0,-11,-1,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,117,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,-3,0,0,0,0,0,0,-9,-15,0,0,0,0,0,0,-1,0,0,0,0,0,0,-5,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,-35,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-6,0,-3,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-12,0,0,0,0,0,0,0,0,-1,-7,0,0,0,0,-2,0,-7,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,-5,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,0,0,0,0,0,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,-14,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,115,0,0,-22,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-11,0,-15,0,0,0,0,0,0,0,0,-4,0,0,-2,0,0,0,0,0,0,-1,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-1,-13,0,0,0,0,-15,0,-2,0,0,-1,0,0,0,0,0,-6,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-10,-2,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,-1,0,-2,0,-1,0,-6,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-11,-1,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-11,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,116,0,-2,0,0,0,0,0,0,0,0,0,0,0,-19,-1,0,0,0,0,0,0,-15,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,-1,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-7,0,0,0,-1,0,-2,0,0,-1,0,-2,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,-1,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-26,0,0,0,0,0,-6,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-18,0,0,0,0,0,0,107,-15,0,0,-1,0,0,0,0,0,0,0,-2,0,-15,0,62,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-4,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,-15,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,-1,0,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,0,-3,0,0,-7,0,0,-14,0,0,0,0,0,0,0,0,-1,-1,0,0,-1,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-1,0,0,0,-1,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,0,-4,0,0,63,0,0,0,0,0,-4,0,0,0,0,-17,-4,-21,0,0,0,0,0,0,0,0,0,-1,0,-9,0,-1,0,0,0,0,0,-1,0,-2,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,-5,0,0,0,-2,0,0,115,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,-9,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-5,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,-11,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,117,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-13,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,-1,0,0,0,-1,0,-1,-16,0,0,0,0,-22,0,0,0,0,0,0,0,0,-15,0,-1,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-5,0,0,0,0,0,-14,0,0,-1,0,0,0,0,-2,0,0,0,-3,-6,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-45,0,0,0,-1,0,0,0,-1,-2,-1,0,0,0,0,0,0,0,0,0,0,0,34,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-5,-6,-1,-12,0,0,0,0,0,0,0,-1,0,-8,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-1,0,0,0,0,0,-4,-1,0,0,0,0,0,0,-8,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,-1,-16,0,0,-1,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-2,-1,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,-5,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,0,-1,-19,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,-2,0,0,0,0,0,0,-15,-9,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-5,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,-3,-1,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,60,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,108,-1,0,0,0,-25,-1,-16,0,0,0,0,-12,0,0,-1,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-8,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,-1,0,0,-8,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,-13,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,-2,0,0,0,-4,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-3,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-6,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,-14,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,0,0,-13,0,-1,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,-1,0,0,0,0,-11,0,-8,0,0,0,0,0,-2,0,0,0,0,0,0,0,-1,0,0,0,-1,0,-10,0,-2,-6,0,0,0,-3,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,-9,0,0,0,0,0,0,0,0,0,0,-16,0,-6,0,-1,0,0,0,-20,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-4,0,0,0,0,0,0,0,0,0,0,-1,-4,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,-1,0,-1,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,127,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-3,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,-13,0,0,0,0,0,0,0,0,0,-3,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-1,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-3,0,0,0,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,-1,-3,0,0,0,-9,0,0,-21,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,-2,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,-1,0,0,-2,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,116,0,0,0,0,115,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-8,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,0,0,0,-1,0,-1,0,0,0,0,-1,0,0,-3,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-5,0,0,0,0,-2,0,0,0,0,0,0,0,101,0,-1,0,0,0,0,0,-1,0,0,0,-1,0,-1,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,-4,0,-13,0,0,0,0,0,0,0,0,-1,0,0,0,-5,0,0,-1,0,-19,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,-14,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-9,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,-2,0,0,0,-11,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-2,0,-11,0,0,-2,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,-4,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-1,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,-2,0,-1,0,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,0,0,0,-1,-9,-2,0,-16,0,0,0,0,0,0,-1,0,-2,0,0,-1,0,-2,-6,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,-2,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-1,-1,0,0,0,0,-9,0,0,-2,0,0,0,0,0,0,0,0,111,0,0,-2,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,-21,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-10,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,-12,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,-2,0,0,-1,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,117,0,0,0,-7,0,0,0,0,0,0,0,-1,0,-1,0,33,0,0,0,0,0,0,0,0,0,0,0,79,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,-13,0,0,-1,0,0,0,-8,0,0,-1,0,0,0,-11,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-5,-1,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,-4,0,0,0,0,-3,0,0,0,-5,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-13,0,0,-2,0,0,0,0,0,0,0,-6,0,-25,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,-11,0,0,-5,0,0,0,0,0,0,-2,0,0,0,-3,0,0,-1,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-27,0,0,-1,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-1,0,0,-3,0,0,0,0,0,-6,0,0,0,0,0,0,0,-10,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-3,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-9,-1,0,0,0,0,0,0,0,0,0,0,-6,0,0,-16,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,-30,0,-1,0,0,0,0,0,-1,0,-5,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,-3,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-2,0,0,0,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,-3,0,-1,0,0,0,0,0,0,0,88,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,-2,-1,0,0,0,0,0,0,0,-13,0,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-13,0,0,0,0,0,0,-1,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-12,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,115,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-6,0,0,0,0,0,0,0,0,0,0,-7,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-18,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,-5,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,-4,0,0,-13,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,-4,0,-1,0,0,0,0,-3,0,117,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-15,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,117,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,-8,0,0,-1,0,-7,0,0,-1,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-28,0,-3,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,51,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,-13,0,0,0,-12,0,0,0,0,0,0,0,0,0,-5,0,0,-1,0,0,-1,0,0,0,0,-8,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,-15,0,0,0,0,-2,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,-4,-1,-1,0,0,0,-13,0,0,0,0,0,-3,0,0,0,0,0,0,0,-4,0,0,-9,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-4,-7,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,-2,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,-16,0,0,0,-3,0,0,0,0,26,0,0,-2,0,-2,0,0,0,0,0,0,-6,-13,0,-4,-1,-6,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-1,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-5,0,0,0,0,-1,0,0,-1,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,-5,-1,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,-7,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-1,0,0,-1,0,0,0,-18,0,0,0,0,0,0,-10,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-3,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-34,0,0,0,0,0,0,0,0,0,0,-2,-2,0,0,-1,0,0,0,-2,0,-5,0,0,0,0,-3,0,0,-4,0,0,0,0,-1,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,0,-16,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-1,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,-1,0,0,0,-2,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,22,0,0,0,0,0,0,0,-2,-2,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,-16,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,-16,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,-1,0,0,0,0,-24,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-3,0,-1,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-15,0,0,0,0,0,-3,0,0,0,-1,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,-2,0,-1,0,0,0,0,-1,0,0,0,0,-2,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,0,0,-6,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,-11,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,-1,0,-26,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,25,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-12,0,0,-10,0,-5,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-12,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-15,0,0,0,0,0,-1,0,0,0,-1,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,-24,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,0,0,0,0,0,0,0,-1,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,-2,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-5,0,-1,0,0,0,0,-1,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-4,-1,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,-2,0,0,0,0,115,0,0,0,0,-2,0,0,-4,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,-1,-2,0,0,0,-1,0,0,0,-12,0,0,0,0,0,0,0,0,0,-13,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-12,-4,-1,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,-6,0,-1,0,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,-2,0,0,0,0,0,0,-11,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-4,0,0,0,0,0,0,-2,-1,0,0,-4,0,0,-1,0,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,109,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,-8,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-9,0,0,0,-17,0,0,0,0,0,-10,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-2,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,-1,0,0,0,0,0,-1,0,0,0,-4,0,0,-2,0,-9,0,0,0,0,0,0,-1,0,0,0,-1,-2,0,0,-11,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-12,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,-3,-16,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-4,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,-1,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,-9,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,-2,0,0,106,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-8,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-10,0,0,-3,0,0,0,0,0,0,-17,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,-1,-1,-1,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-3,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-3,0,-7,0,0,0,0,0,0,0,0,0,-1,0,-4,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,-1,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,-1,0,0,0,0,-1,0,0,0,0,0,0,-3,0,0,0,0,-2,0,0,0,0,0,0,0,0,0"
 var MODEL_NARRATIVE = "b:-1.5450379097836888;s:0.04407508326505247;w:-25,-1,0,0,0,0,-3,0,-17,0,-2,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-6,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,-7,-4,0,-1,0,0,0,0,-1,0,0,0,0,0,0,-3,-25,0,0,0,-33,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,-10,0,-4,0,0,0,-5,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,0,0,0,-18,0,0,0,0,0,0,0,0,-5,-6,-2,0,0,0,-10,0,0,0,0,-2,0,-25,0,0,0,0,0,-12,-1,0,0,-6,-1,0,0,-1,0,0,0,-2,-4,0,0,0,0,0,0,-6,0,0,0,-9,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-1,0,0,0,-17,0,0,0,-2,0,0,0,0,0,0,0,-10,0,0,-4,0,0,0,0,0,0,0,0,-2,0,-23,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,109,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-30,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-31,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,-1,0,0,0,-13,0,0,0,0,-31,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,-9,0,0,-8,-25,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,37,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,0,-19,0,0,0,-5,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-2,-14,-6,0,0,0,-4,0,-5,0,0,-12,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-6,-1,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-3,0,0,0,0,0,0,0,0,-15,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-14,-7,-4,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,0,-39,0,0,0,-2,0,0,-21,-8,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,-2,0,-43,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-18,-23,0,0,0,0,0,0,0,0,-2,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-2,0,0,0,0,0,0,0,0,0,0,-55,-79,0,0,0,0,0,0,-1,0,0,0,0,0,0,-1,-5,0,0,-13,0,-19,0,0,0,0,0,0,0,-3,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-4,0,0,-19,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,-2,0,0,0,0,0,0,-4,0,0,-2,0,0,0,0,-4,0,0,0,0,0,-1,0,0,0,0,0,0,-12,-8,0,0,0,-1,0,0,0,0,0,-9,0,0,0,-47,0,-1,0,0,0,0,-15,-3,0,0,0,0,0,0,0,0,0,0,0,-39,-1,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,-2,-4,-24,0,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,-8,-24,0,0,0,0,0,-2,-25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-32,-8,0,0,0,0,0,-1,0,-5,0,0,0,0,0,0,0,0,0,0,-13,-18,0,0,0,0,0,0,0,0,-5,-7,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-40,0,0,0,0,0,0,0,-1,0,0,-2,0,0,0,0,-1,0,0,0,0,0,-18,-1,0,0,0,0,0,0,0,0,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-33,-11,0,-1,-15,0,0,120,0,-1,0,0,0,0,0,-1,0,0,-3,-12,0,0,-5,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-2,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,-24,-7,0,0,-30,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-20,0,-34,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-2,0,0,0,-2,-2,0,0,0,0,-2,0,0,0,0,-2,0,0,-9,0,0,0,0,0,0,0,-4,0,0,-2,0,0,0,0,-1,0,0,0,-47,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,0,-3,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-24,0,-4,0,123,0,0,0,0,0,0,0,-2,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-4,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,-1,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,-5,0,-2,-2,0,0,-1,-24,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-3,-13,0,0,0,0,0,0,0,0,0,-32,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,-1,0,0,-21,-6,0,112,-33,0,0,0,0,0,-8,0,0,0,0,0,0,0,-9,0,0,0,0,-6,0,0,-6,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-15,-42,0,-2,0,0,-42,-29,0,0,0,-1,-5,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-5,0,0,0,-1,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-13,-14,0,-2,0,-10,0,0,0,0,0,-10,0,0,0,-3,0,0,-11,0,0,-5,0,0,-6,0,0,0,0,0,0,0,-1,0,0,121,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-2,0,-7,0,0,0,0,-36,0,-13,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,-31,0,0,0,0,0,-3,0,0,-32,0,0,0,0,0,-2,0,0,0,0,-1,0,-7,0,0,0,0,0,0,-1,0,0,0,-31,0,-1,-29,0,0,0,0,0,0,0,-1,0,0,0,0,-2,-5,0,0,0,0,0,-3,0,0,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-27,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-4,0,-21,0,0,0,0,0,0,0,0,-32,-43,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,-8,0,0,0,0,0,0,-2,0,0,0,0,0,0,-13,0,0,-8,122,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,-32,0,0,-16,0,0,0,0,0,0,0,-7,0,0,-29,0,0,-2,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-7,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-41,0,0,-1,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,-1,0,-25,0,0,0,0,-31,0,0,0,-1,0,0,0,-1,-2,0,0,0,0,0,-18,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-13,0,0,0,-18,0,0,0,0,0,0,0,-10,0,0,-8,0,0,0,0,0,-7,0,0,0,0,0,-42,0,0,0,0,0,0,-6,0,-27,0,0,0,-5,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-1,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-7,0,0,0,-1,0,114,0,0,0,-2,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-10,0,120,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,-4,-92,0,0,0,-12,0,0,0,-13,0,0,0,0,117,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,-1,0,0,0,0,-7,0,0,-36,-5,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,83,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-2,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,-1,-19,-2,0,0,0,0,0,0,0,-42,0,0,0,0,0,0,0,0,0,-43,0,0,0,0,-2,0,0,0,-1,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-21,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,-3,-2,0,0,0,0,-5,0,0,0,-8,0,0,-2,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-16,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,-3,0,-2,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-4,0,0,0,0,0,0,-12,0,0,-6,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,-3,0,0,0,0,0,0,-6,0,0,0,-32,0,0,0,-1,-4,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-8,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,-40,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,-8,-34,0,0,0,-25,-16,0,0,-1,0,0,0,0,0,0,-4,-5,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-4,0,0,0,0,-2,0,0,0,-1,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-3,0,-9,-7,0,111,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,-3,-7,0,0,0,-28,0,0,0,0,0,0,0,0,0,0,-2,-43,0,115,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,-3,0,-3,0,0,-1,-27,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,-6,0,0,0,0,-2,0,0,0,0,-9,-8,0,0,0,0,-19,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,104,0,0,0,0,-10,0,0,0,0,-1,124,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-12,0,0,-1,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-1,-1,-2,-24,0,0,0,0,-6,0,-1,0,0,0,-1,0,0,0,0,-3,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-29,0,0,0,0,-6,-2,0,0,-1,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,0,-2,-10,-3,0,0,-30,0,0,0,0,0,0,0,0,0,-1,0,0,0,-20,0,0,0,0,0,0,0,0,0,0,-73,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-30,0,-39,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-8,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,-2,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-32,0,0,0,0,0,0,-2,0,0,0,0,0,-7,0,-5,-4,0,-1,0,0,0,0,0,0,0,-3,0,0,-29,0,0,0,0,-5,0,0,0,0,0,0,-64,-8,0,0,-10,0,0,0,0,0,0,-3,0,0,0,0,0,-2,0,0,0,0,0,-2,0,0,-5,0,0,0,0,-2,0,0,0,0,0,-26,0,0,-41,0,0,0,-6,0,0,-3,0,0,0,0,0,-1,0,-1,0,-4,-7,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-2,0,0,0,-10,-17,0,0,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-34,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,102,0,0,-1,0,0,0,-3,0,0,-18,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,-4,0,0,0,0,0,-7,0,0,0,0,0,0,-7,-8,0,-22,0,0,0,78,0,0,0,0,0,0,-4,0,0,-30,0,0,0,-11,0,0,0,0,57,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-11,0,0,0,0,0,0,0,0,-5,-16,0,0,-1,-1,0,0,-1,-10,0,0,-2,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-22,0,0,0,0,0,-6,0,0,0,-2,0,-1,0,0,0,0,-10,0,0,0,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,-2,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,-29,0,0,0,0,-14,0,0,0,0,0,-2,0,-1,0,-32,-4,0,0,-1,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-5,0,0,-10,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-4,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-45,0,0,0,0,0,0,-5,0,-39,0,-11,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,-2,-41,0,-2,0,0,0,0,0,-5,0,0,0,0,-33,0,0,0,0,0,0,0,0,-1,0,-3,-6,0,-18,0,0,0,0,-106,0,0,0,0,0,0,0,-4,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-23,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,-54,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-10,0,0,0,0,0,0,0,-8,0,0,0,-2,0,-2,0,0,0,0,-2,98,0,-1,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-4,0,0,0,0,0,0,0,0,-6,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,-2,0,0,0,0,0,0,0,0,0,0,-12,-20,0,0,0,0,0,0,-2,-4,0,0,0,0,0,-1,-1,0,-7,0,0,-1,0,0,-2,0,0,-1,-21,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-51,0,0,-1,0,0,-1,0,-4,0,0,0,0,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,0,0,0,0,0,0,0,-62,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,-9,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-6,0,-1,0,0,0,0,0,-2,0,0,0,0,0,0,-6,0,0,-3,0,-1,-6,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-65,0,0,0,0,0,0,-4,0,0,-2,0,0,-21,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-1,0,-2,0,-1,0,0,0,0,0,0,-1,0,0,-2,-43,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-3,-3,0,-14,0,0,0,-28,-24,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-36,0,0,0,-4,-1,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-1,0,0,0,0,-1,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-32,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-1,0,0,0,-6,0,0,0,-4,0,0,-1,-1,0,0,0,0,0,-1,0,0,0,0,0,0,-43,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,-3,0,0,0,0,-4,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,122,0,0,0,0,0,0,-4,0,0,0,0,0,0,-15,-26,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,-3,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,-69,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,-10,0,-23,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-29,-20,0,0,0,-1,0,0,0,-11,-5,0,0,0,0,-5,0,-27,118,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,-11,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,-5,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-38,0,0,-2,0,0,0,-2,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,26,0,-2,0,0,0,0,-2,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,-1,0,0,0,-1,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,-7,-36,0,0,0,0,-78,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,-2,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-42,0,0,97,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-16,0,0,-2,-1,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-1,0,-2,-43,0,-35,0,0,0,0,-2,0,0,0,-13,0,0,-6,0,0,0,0,0,0,-3,0,0,0,-30,0,0,0,0,0,0,0,0,-15,0,0,-1,-32,0,0,0,0,-57,0,-24,0,0,-1,0,0,-1,0,0,-6,0,0,0,-1,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-6,0,0,0,0,-32,-15,0,0,0,0,0,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,0,-3,0,-7,0,-1,0,-17,-3,0,0,0,0,0,0,0,0,0,-14,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,-2,0,0,0,-1,-23,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,-28,-3,0,0,0,0,0,-2,0,-2,0,0,0,0,-1,0,-42,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-1,0,0,81,0,0,-6,0,0,-10,0,0,0,-4,0,0,0,0,0,0,-1,0,-1,-1,0,0,-9,0,-35,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-43,0,-5,0,0,-1,0,0,0,0,0,0,-2,0,83,-3,0,0,0,0,0,0,121,-2,0,0,0,-5,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-2,-2,0,-26,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-14,0,0,0,-1,0,-8,0,0,-16,0,-4,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-2,0,0,0,0,0,0,-3,0,-3,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,-10,0,0,0,0,-16,0,-15,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-4,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,-2,0,0,-11,0,0,0,0,-1,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-31,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-4,0,0,0,0,0,-2,0,-68,0,0,0,0,0,-27,0,0,0,0,-10,0,0,-7,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-33,0,0,0,0,0,0,-43,122,0,-6,-2,0,0,0,0,0,0,0,-11,0,-19,0,-25,0,0,0,0,0,0,0,0,0,0,-20,0,0,0,-3,0,0,0,0,0,0,-2,0,0,0,0,0,0,-1,0,-1,-46,0,0,0,0,0,0,0,-3,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,-2,0,0,0,0,0,0,-3,0,-2,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,-24,0,-8,0,-14,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,-7,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,-1,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,-32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,-1,0,0,0,0,-6,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-2,0,0,0,0,0,0,-21,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-17,0,0,0,0,-7,0,-10,0,0,-8,0,0,-52,0,0,0,0,0,0,0,-1,-4,-8,0,0,-1,0,0,0,0,0,0,0,-9,-33,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,-2,0,-2,0,-3,-2,0,0,-1,-3,-18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,-34,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-3,0,0,0,0,0,0,-8,0,0,0,0,0,-14,0,0,104,0,0,0,0,0,-12,0,0,0,0,125,-18,-33,0,0,0,0,0,0,0,0,0,-1,0,-14,0,-13,-6,0,0,0,0,-3,0,-10,0,-1,0,0,0,0,0,0,0,0,110,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,-2,-6,-6,0,0,0,-16,0,0,-41,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,-1,-24,0,0,0,0,0,0,0,0,-2,0,0,-1,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,-12,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-31,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-14,0,-2,0,0,0,0,0,0,0,-1,-1,0,0,0,0,-33,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-25,0,-1,0,0,0,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-44,-2,0,0,-2,-4,0,0,0,0,0,0,0,0,0,0,0,-3,-20,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-30,-31,0,0,0,0,-2,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,-16,0,0,0,-34,0,-3,113,0,0,0,0,-30,0,0,0,0,0,0,0,0,123,0,-2,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,-15,118,0,0,-3,0,0,0,0,-15,0,0,0,-5,-22,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-11,0,0,-1,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,-5,-2,0,0,0,0,0,-1,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,-27,0,0,-2,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-58,0,0,0,-10,0,0,0,-2,-4,-2,0,0,0,0,0,0,0,0,0,0,0,-22,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-2,0,-13,-18,-9,-31,0,-12,0,0,0,0,0,-2,0,-35,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-34,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-4,-1,0,0,0,-5,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,0,0,0,0,-9,0,0,0,0,0,-3,0,0,0,-7,0,-3,0,0,-15,0,0,-13,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,-4,-2,0,0,0,117,0,0,-2,0,0,0,0,-25,0,0,0,-3,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-6,0,0,0,0,0,0,0,0,-1,-1,0,-28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,-3,0,0,0,0,0,0,-15,-2,-1,0,0,0,-13,0,0,0,0,0,0,-3,0,0,-1,-1,0,-5,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,-2,0,0,-28,0,0,-1,0,0,0,0,0,0,-10,0,0,0,-6,114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-1,0,0,0,0,0,0,-2,0,0,0,0,-4,0,-1,0,0,0,-2,-5,0,0,0,0,0,0,0,0,0,0,0,-9,-81,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-5,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-15,0,0,-4,0,0,0,0,0,0,118,-36,0,0,0,0,0,0,-4,0,0,-2,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,-1,-4,0,0,0,0,-12,0,0,-1,0,0,0,0,0,-1,0,-2,0,0,-11,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-30,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-12,0,0,-3,0,-1,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,-2,0,-8,0,0,0,0,-9,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-3,0,-12,0,0,0,0,0,0,0,0,0,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,-58,0,0,0,0,0,0,0,0,-43,0,0,0,0,-26,-2,-36,0,0,0,0,-31,0,0,-2,0,0,0,-2,0,-9,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-12,0,0,0,0,0,0,0,-1,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,-2,0,0,0,0,0,0,-4,0,0,0,-10,0,0,-2,0,0,-2,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-32,-5,0,0,0,0,0,-22,0,-9,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-2,0,0,0,0,-43,0,0,-8,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-7,-3,0,0,0,0,0,0,0,0,-20,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-4,0,0,0,0,0,0,-20,0,0,0,-3,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,-1,0,-7,0,0,0,0,-1,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,0,0,-20,0,0,0,0,0,-12,0,-12,0,0,-5,0,-2,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,0,0,0,-17,-3,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,-4,0,0,-3,0,0,0,0,0,0,-15,0,0,0,0,-1,-33,0,0,-2,0,-1,0,0,0,-1,0,0,0,0,0,-3,0,0,-8,0,0,-32,0,-5,-9,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-2,0,-29,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,-5,-2,0,0,0,-2,0,-26,0,-7,-10,0,0,0,-19,0,0,0,0,0,-6,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,102,0,0,0,0,0,0,-13,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,-2,0,0,0,0,-2,0,0,-2,0,-11,0,0,0,0,0,0,0,-1,-2,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-45,-43,0,0,0,0,0,0,0,0,0,0,121,0,-39,0,-1,0,0,0,118,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-12,0,-12,0,0,0,-9,0,0,0,0,0,0,-5,-29,0,0,0,0,0,0,-8,0,-1,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-19,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,-2,-10,0,0,0,-2,-1,0,0,0,-2,-6,0,-2,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-5,-1,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,114,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,-2,0,0,0,0,0,-1,-2,0,-1,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-54,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,-2,0,0,0,0,0,-8,0,0,0,0,0,0,-20,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,-9,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-2,0,0,0,-7,0,-2,0,0,0,0,0,-2,0,0,-1,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-4,0,0,0,-1,0,0,0,0,-1,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-44,0,-1,0,0,0,0,0,0,0,0,0,0,-24,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,-1,-8,0,0,0,0,0,0,0,0,0,-15,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-11,0,0,0,0,0,-14,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,-6,0,0,-1,0,0,-2,0,0,0,-7,0,0,0,-2,0,0,0,0,0,0,0,0,0,-6,-5,-26,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,-4,-1,0,-1,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-4,-30,0,0,0,0,0,0,0,0,0,-10,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,-33,0,0,0,0,0,0,0,0,-4,-1,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-7,0,0,0,0,0,-37,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,-11,0,-1,0,0,0,0,0,0,0,0,0,-6,0,0,-22,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,-6,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-1,0,0,0,-1,0,0,-5,0,0,0,0,0,0,-7,0,0,0,-4,-9,0,0,0,-20,0,0,-57,0,0,0,0,-3,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-2,0,0,0,0,-5,0,0,-2,-2,0,0,0,-1,0,-6,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-8,0,-13,0,0,-18,0,0,0,-19,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-3,-1,0,0,0,-8,0,0,0,-6,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,-50,0,0,0,0,-43,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,-25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,-19,0,0,0,-1,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-60,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,0,0,0,-2,0,0,0,0,-7,0,0,0,0,-1,0,-2,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,-2,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,-14,0,0,-14,0,0,0,0,-6,0,0,0,-2,0,0,0,-33,0,-2,0,0,0,0,0,-15,0,0,0,-2,0,0,0,0,-2,0,-8,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,-12,0,-34,0,0,0,0,0,0,0,-1,-2,0,0,0,-21,0,0,-5,0,-52,0,0,0,0,0,0,0,0,0,0,-1,-1,0,0,0,0,-2,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-1,0,0,0,0,0,0,0,-7,0,0,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,-3,0,0,0,-2,-5,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,-2,0,0,-1,0,-26,0,0,0,0,-66,0,0,0,0,0,0,0,0,0,-41,0,0,0,-13,0,0,0,0,0,-2,0,0,0,0,-6,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-3,0,0,0,0,0,0,0,0,0,-24,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,-6,0,0,0,0,-3,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,-25,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-8,0,0,-10,0,-10,0,0,-5,0,0,0,0,0,0,0,0,-15,0,0,0,0,-2,0,0,-25,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-3,0,0,0,0,-2,0,0,-9,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,-2,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-1,0,0,0,0,0,0,0,0,-1,0,0,0,0,-1,0,0,-6,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-2,0,0,0,-5,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,-34,0,-3,0,-6,-7,0,0,-1,0,0,0,0,0,0,0,-3,0,0,0,0,-2,0,0,-4,-23,-6,0,111,0,0,0,0,0,0,-5,0,-10,0,0,-18,0,0,-8,0,0,0,0,0,0,119,0,0,0,0,0,0,0,0,-7,0,0,0,-2,-4,0,0,0,0,0,0,0,0,0,0,0,0,-30,0,-2,0,0,0,0,0,-27,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-3,0,0,0,-11,0,0,0,-2,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-2,-2,0,-1,0,0,-13,0,0,-13,-2,0,0,0,0,0,0,0,-38,0,0,-13,0,0,0,-9,-2,0,0,0,0,-2,0,0,0,-33,-5,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,-20,0,0,0,0,-2,0,0,0,0,-1,-3,0,0,0,0,0,0,0,0,0,0,0,-1,0,-2,-27,0,0,0,0,0,-9,0,0,0,0,0,0,0,-8,0,-22,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-4,0,-17,0,0,-1,0,0,0,0,0,0,0,-2,-25,0,0,0,0,0,0,0,0,0,0,0,-1,0,-28,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,-43,0,0,0,-20,0,0,0,0,0,0,0,-4,-12,-4,0,-34,-7,0,0,0,0,0,0,0,0,0,0,-47,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-33,0,-6,0,0,0,0,0,0,0,-2,0,0,0,0,0,-31,0,0,-2,0,0,0,-24,0,0,-3,0,0,0,-29,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,-31,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,-1,0,-1,0,0,0,0,0,0,0,0,0,-9,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,-4,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,-24,-2,-7,0,-8,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,-1,-2,0,-6,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,-1,0,-1,0,-3,0,0,0,0,0,0,0,-9,0,0,0,-11,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-31,0,0,-2,0,0,0,0,0,-23,0,0,0,-55,0,-2,-4,-8,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,-2,-4,0,0,-1,0,0,0,0,-27,0,-1,-6,0,0,0,0,0,0,-14,0,0,0,-3,0,0,-6,0,0,-10,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,-40,0,-1,-1,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,116,0,0,0,0,0,0,0,0,0,-39,0,0,0,0,-3,0,0,0,-6,0,0,0,0,0,0,0,-22,0,0,0,0,0,0,0,-1,-1,0,0,-24,0,0,0,0,0,0,0,0,-2,0,0,-5,0,0,0,0,0,-5,0,-1,0,0,0,0,0,-12,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-11,-14,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,-1,-13,0,0,0,0,0,0,0,0,0,0,-17,0,0,121,0,0,0,0,0,0,-32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-2,0,0,-1,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,-69,0,-3,0,0,0,0,0,-7,0,-15,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-3,-28,0,0,0,0,0,0,0,0,-5,-1,-4,0,0,-1,0,0,0,0,-1,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-3,0,0,0,-45,0,0,0,0,0,0,0,0,0,0,0,0,-1,-2,0,0,0,0,-3,-9,0,0,0,0,0,0,0,0,0,-23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-9,125,0,-1,0,0,0,0,0,0,0,0,0,0,0,122,0,-1,0,0,0,0,0,0,0,0,0,0,-3,-1,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,-6,-1,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,-1,0,-14,-4,0,0,0,0,0,0,0,-32,0,-16,0,0,0,0,-4,0,0,-4,0,0,0,0,0,-1,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-3,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-33,-5,-2,0,0,0,0,-7,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,111,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,0,0,-9,-30,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-9,0,0,0,0,0,0,0,0,0,0,-1,0,-1,-43,0,0,-2,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,-4,-22,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-11,-18,0,0,0,0,0,0,0,0,0,0,-25,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-16,0,-6,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-7,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-10,0,0,0,0,0,0,0,0,0,0,-4,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-39,0,0,0,0,0,-15,0,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,-21,0,0,-31,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,0,0,0,0,0,0,-16,0,-1,0,0,0,0,-6,0,-43,0,0,0,0,0,0,-2,-2,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-2,0,0,118,0,0,0,-2,-3,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,-1,-4,0,0,0,-2,0,0,0,-2,-10,0,0,0,0,0,-6,0,0,0,-2,0,0,0,0,0,0,0,-11,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-8,0,0,-6,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-5,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-45,0,0,0,0,0,0,0,0,0,0,0,0,-33,0,0,0,0,0,0,0,-2,0,-5,0,0,-8,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,-80,0,-4,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,0,0,0,-17,0,-2,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,-12,0,0,-26,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-30,0,0,0,-30,0,0,0,0,0,0,0,0,0,-8,0,0,-5,0,0,-2,0,0,0,0,0,-28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,-3,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-1,0,0,0,0,0,0,0,0,64,0,0,0,0,0,109,0,0,0,0,-4,0,0,0,0,-1,0,-13,0,0,-7,0,0,0,0,0,0,0,-9,-2,-5,0,0,0,-32,0,0,-1,0,0,-21,0,0,0,0,0,0,0,-32,0,0,-25,0,0,0,-1,0,0,-1,0,0,0,0,0,0,0,-17,-22,0,0,0,0,-17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-1,-4,0,0,0,0,0,-16,0,-11,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,-4,0,0,0,0,0,0,0,105,0,0,0,-14,0,-2,0,0,-127,0,0,-10,0,0,0,0,0,0,0,0,-7,-26,0,-8,-4,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-31,-11,0,0,-13,0,0,0,0,0,0,0,0,0,-12,-1,0,-3,0,-2,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-30,0,0,0,0,0,0,-2,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,-18,-4,0,0,0,-1,0,0,-4,0,0,0,-1,-3,0,-4,0,0,0,0,0,0,0,0,0,-5,-1,0,0,0,-4,-10,0,0,0,0,0,-2,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,-7,0,0,0,-19,0,0,0,-1,0,0,0,0,0,0,0,-2,0,0,0,0,-2,-3,0,0,0,0,0,0,0,0,0,-5,0,0,-2,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-58,0,0,0,0,0,0,-8,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-10,-1,0,0,0,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-2,0,0,-2,0,0,-7,-56,0,0,0,-1,0,0,-27,0,-7,-9,-1,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,-8,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,-1,-4,0,0,0,0,0,0,0,0,0,0,-12,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,92,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-6,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-12,0,0,0,0,-72,0,0,0,0,0,0,0,-1,0,0,-6,-6,0,0,-5,0,0,0,-3,0,-13,0,0,0,0,-6,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,123,0,0,0,0,0,0,-19,0,0,0,0,0,0,0,0,0,0,0,-53,0,0,0,-1,0,112,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,-1,-27,-2,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,-2,0,0,0,-3,0,0,0,0,0,0,0,0,0,-11,-1,0,0,0,0,-1,0,0,0,-4,0,0,0,-2,0,0,-1,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-3,0,0,0,-1,0,0,0,0,0,0,0,0,-3,-1,-53,0,0,0,0,0,0,0,-3,-2,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-9,0,0,0,-4,0,0,0,0,0,0,0,0,-5,-7,0,0,0,0,0,0,0,0,-1,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-25,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-35,0,0,-4,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-21,0,0,0,0,119,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,0,0,-1,0,-20,0,0,-9,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,117,0,0,0,0,0,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-21,0,0,0,0,0,-4,0,0,0,0,-45,0,0,0,0,0,0,0,0,0,0,0,-2,0,-2,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,-19,0,-8,0,0,0,0,0,0,0,0,0,0,0,-3,-7,0,0,0,0,-2,0,-6,0,0,0,0,0,0,-6,0,0,0,0,-1,0,-1,-21,0,0,0,0,0,-20,0,0,0,-4,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,-4,0,-2,0,0,0,0,-2,0,0,0,0,-5,0,0,-3,0,0,0,0,-1,0,-5,0,0,0,0,0,0,-14,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-14,113,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,-1,0,-2,0,0,0,0,0,0,-27,0,0,0,0,0,0,0,0,0,0,0,-43,0,0,0,0,0,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,-2,0,-71,0,0,-34,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-16,0,0,0,0,-19,0,0,0,0,-1,0,-3,0,0,0,0,-10,0,-7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-1,0,0,0,0,0,-29,0,0,-26,0,-8,0,-4,0,-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-31,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,124,0,0,0,0,0,-8,0,0,0,0,0,0,-35,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-66,0,0,0,0,0,0,-14,0,0,-1,0,0,0,-2,0,0,0,0,0,-2,0,0,0,0,0,-6,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-8,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,-5,0,-3,0,0,-14,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,-52,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-5,0,0,0,0,0,0,-8,-1,-11,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,-10,0,0,-5,0,0,0,-1,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,83,-9,0,0,0,0,0,-16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-1,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,23,0,0,0,0,0,0,0,0,0,0,-12,-2,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-7,0,-3,-1,0,0,0,-2,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-22,0,0,0,0,0,0,0,0,-4,0,0,0,0,-2,0,0,0,0,0,-1,0,-24,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,-3,-1,0,0,0,0,0,-4,0,-21,0,0,0,0,0,0,0,-11,0,0,0,-15,-1,0,0,0,-2,0,0,0,0,-41,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,-2,-4,0,0,0,-1,0,0,0,-28,-1,0,0,0,-4,-1,0,0,0,-32,0,0,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-32,-14,-4,0,0,0,0,0,-2,-5,0,-9,0,0,0,0,0,0,0,-10,0,0,0,0,0,0,0,-1,0,0,-7,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-5,-3,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,-28,0,0,0,0,0,-33,0,-1,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,-13,0,0,0,0,0,-12,-8,0,0,0,0,0,0,-24,0,-2,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,-2,-5,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,-1,0,0,-1,0,0,0,0,0,0,-13,0,0,0,-17,0,0,-2,0,0,0,-16,-9,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,-2,0,0,0,0,0,-3,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,-7,0,-42,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,-9,0,0,0,0,0,0,0,0,-4,0,0,0,0,0,0,0,-4,0,0,-33,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,-1,0,0,0,-6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-28,-4,-12,0,-7,0,0,0,-8,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-2,0,0,-2,-36,0,0,0,0,0,-2,-13,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,110,0,-1,-1,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,-32,0,0,0,0,0,-10,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,-10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,-3,-1,0,-34,0,0,0,0,0,0,0,0,0,-4,0,0,-1,0,-4,0,-10,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-9,0,-4,-6,0,0,0,0,-4,0,0,0,-16,0,-1,-16,0,-25,-2,0,0,0,0,0,-2,0,0,0,-4,-2,0,-1,-29,-2,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,-39,0,0,-13,0,0,0,-4,0,0,0,0,0,-1,-9,0,0,0,0,0,0,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,-13,0,0,0,0,0,0,0,0,0,0,0,-11,0,0,0,-8,-3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-18,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,0,0,0,-35,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,-7,-7,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-1,0,0,0,0,0,-1,0,0,0,0,0,-22,0,0,0,-1,0,0,-1,0,0,0,0,0,-32,0,0,0,0,0,-4,0,0,0,0,-1,0,-1,0,0,-5,0,0,0,-8,0,-55,0,0,0,0,0,0,0,0,0,0,0,0,0,125,0,0,0,-4,0,-1,0,0,0,0,0,0,0,0,0,0,-1,-24,0,-10,0,0,0,0,0,0,-12,0,0,0,0,0,0,-17,0,0,0,0,0,0,0,-7,0,0,-43,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,-4,-6,0,-2,0,-26,0,0,0,0,0,0,0,0,-4,0,0,0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,-1,-3,0,0,0,0,0,0,0,-31,0,0,-2,0,0,0,0,0,0,-5,-1,0,0,0,-2,0,0,0,0,0,0,0,0,-1,0,0,-5,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,-7,0,0,0,0,0,0,0,0,-14,0,0,0,-4,-4,-6,0,0,0,0,0,0,0,-21,0,0,0,0,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,-10,0,0,0,0,0,-11,0,0,0,-1,0,0,0,0,0,0,0,0,-3,0,-1,0,0,0,0,-11,0,0,0,0,0,0,0,0,0,0,0,-11,0,-31,-1,0,0,0,0,0,0,0,-31,0,0,0,0,0,0,0,0,0,0,0,0,0,-7,0,0,0,0,-7,-24,0,0,0,0,0,121,0,0,0,0,0,-1,0,0,0,0,0,0,0,-13,0,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-6,0,0,-1,0,0,0,0,0,-1,-31,-29,0,0,0,0,0,0,0,-7,0,0,0,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,0,0,0,-28,-1,0,0,0,0,0,0,0,0,0,0,-2,0,0,-10,0,0,0,0,-2,0,0,-1,0,0,0,0,0,0,0,-10,0,0,0,0,0,-1,0,0,0,0,0,0,0,-14,0,-5,0,0,0,0,-15,-2,0,0,0,0,0,0,0,-1,0,0,-6,0,0,0,0,0,-2,0,0,0"
 
-// Copy the above variables into your INTENT+v15 (No Weights).js file
-// Replace the empty string placeholders in the //#region EIDOS_MODELS section
+
+
+  // ----------------------------------------------------------------------------
+  // INFERENCE & STATE MANAGEMENT
+  // ----------------------------------------------------------------------------
+
+  // EIDOS helper functions must be defined before they are used.
+  function stem(w) {
+    if (w.length < 4) return w;
+    if (w.endsWith("ies")) return w.slice(0, -3) + "y";
+    if (w.endsWith("es")) return w.slice(0, -2);
+    if (w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+    if (w.endsWith("ing")) {
+      const base = w.slice(0, -3);
+      if (base.length > 2) return base;
+    }
+    if (w.endsWith("ed")) {
+      const base = w.slice(0, -2);
+      if (base.length > 2) return base;
+    }
+    if (w.endsWith("ly")) return w.slice(0, -2);
+    if (w.endsWith("ment")) return w.slice(0, -4);
+    if (w.endsWith("ness")) return w.slice(0, -4);
+    if (w.endsWith("ful")) return w.slice(0, -3);
+    if (w.endsWith("able")) return w.slice(0, -4);
+    if (w.endsWith("ibility")) return w.slice(0, -7);
+    return w;
+  }
+
+  function fnv1a32(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function solveIntent(textTokens, modelStr) {
+    if (!modelStr) return -999;
+    const semi1 = modelStr.indexOf(";");
+    const semi2 = modelStr.indexOf(";", semi1 + 1);
+    const bias = parseFloat(modelStr.slice(2, semi1));
+    const scale = parseFloat(modelStr.slice(semi1 + 3, semi2));
+    const wRaw = modelStr.slice(semi2 + 3);
+    const weights = wRaw.split(",");
+    let score = bias;
+    for (let i = 0; i < textTokens.length; i++) {
+      const h = fnv1a32(textTokens[i]) % HASH_SIZE;
+      if (h < weights.length) {
+        const w = parseInt(weights[h], 10);
+        if (!isNaN(w)) {
+          score += w * scale;
+        }
+      }
+    }
+    return score;
+  }
+
+  // Helper: Run model, apply Sigmoid, set Boolean
+  // We use a threshold of 0.5 (Score > 0.0) for activation.
+  function checkTrigger(tokens, model, targetObj, key) {
+    if (typeof model === 'undefined') return;
+    var rawScore = solveIntent(tokens, model);
+    // Simple binary check: Is the neuron firing?
+    targetObj[key] = rawScore > 0.0;
+  }
+
+  // This is the main execution block for the EIDOS system.
+  // It's wrapped in a try...catch to prevent intent detection errors
+  // from breaking the entire lorebook script.
+  try {
+    if (CHAT_WINDOW.text_last_only) {
+      const norm = _normalizeText(CHAT_WINDOW.text_last_only);
+      const rawTokens = norm.split(' ');
+
+      const tokens = [];
+      for (let i = 0; i < rawTokens.length; i++) {
+        const t = rawTokens[i];
+        if (t.length > 2 && !STOP_WORDS[t]) {
+          tokens.push(stem(t));
+        }
+      }
+
+      const allTokens = tokens.slice();
+      for (let i = 0; i < tokens.length - 1; i++) {
+        allTokens.push(tokens[i] + " " + tokens[i + 1]);
+      }
+
+      // Ensure context.intents object exists and initialize it.
+      if (typeof context.intents !== 'object' || context.intents === null) {
+        context.intents = {};
+      }
+
+      // Reset all intents to false on each run.
+      INTENTS.forEach(function (intent) {
+        context.intents[intent.toLowerCase()] = false;
+      });
+
+      // Intent Detection using 8 Gates of EIDOS
+      // We use a simpler approach than emotions - just check each gate independently
+      checkTrigger(allTokens, MODEL_QUESTION, context.intents, "question");
+      checkTrigger(allTokens, MODEL_DISCLOSURE, context.intents, "disclosure");
+      checkTrigger(allTokens, MODEL_COMMAND, context.intents, "command");
+      checkTrigger(allTokens, MODEL_PROMISE, context.intents, "promise");
+      checkTrigger(allTokens, MODEL_CONFLICT, context.intents, "conflict");
+      checkTrigger(allTokens, MODEL_SMALLTALK, context.intents, "smalltalk");
+      checkTrigger(allTokens, MODEL_META, context.intents, "meta");
+      checkTrigger(allTokens, MODEL_NARRATIVE, context.intents, "narrative");
+    }
+  } catch (e) {
+    // Log EIDOS errors to the console for easier debugging, without halting the script.
+    console.error('[INTENT-LORE] Intent processing failed:', e);
+  }
+
+  /* ============================================================================
+     [SECTION] UTILITIES
+     SAFE TO EDIT: Yes
+     ========================================================================== */
+  //#region UTILITIES
+  function dbg(msg) {
+    if (typeof DEBUG !== "undefined" && DEBUG) {
+      // Replaced personality injection with standard console logging for better debugging.
+      console.log(`[INTENT-LORE] ${String(msg)}`);
+    }
+  }
+    function toArray(x) { return Array.isArray(x) ? x : (x == null ? [] : [x]); }
+    function clamp01(v) { v = +v; if (!isFinite(v)) return 0; return Math.max(0, Math.min(1, v)); }
+    function parseProbability(v) {
+      if (v == null) return 1;
+      if (typeof v === "number") return clamp01(v);
+      const s = String(v).trim().toLowerCase();
+      const n = parseFloat(s.replace("%", ""));
+      if (!isFinite(n)) return 1;
+      return s.indexOf("%") !== -1 ? clamp01(n / 100) : clamp01(n);
+    }
+    function getPriority(e) {
+      let p = (e && isFinite(e.priority)) ? +e.priority : 3;
+      if (p < 1) p = 1;
+      if (p > 5) p = 5;
+      return p;
+    }
+    function getMin(e) { return (e && isFinite(e.minMessages)) ? +e.minMessages : -Infinity; }
+    function getMax(e) { return (e && isFinite(e.maxMessages)) ? +e.maxMessages : Infinity; }
+    function getKeywords(e) { return (e && Array.isArray(e.keywords)) ? e.keywords.slice(0) : []; }
+    function getTriggers(e) { return (e && Array.isArray(e.triggers)) ? e.triggers.slice(0) : []; }
+    function getBlocklist(e) {
+      if (!e) return [];
+      if (Array.isArray(e.block)) return e.block.slice(0);
+      if (Array.isArray(e.Block)) return e.Block.slice(0);
+      return [];
+    }
+    function getNameBlock(e) { return (e && Array.isArray(e.nameBlock)) ? e.nameBlock.slice(0) : []; }
+    function _normalizeName(s) { return _normalizeText(s); }
+    function _isNameBlocked(e) {
+      if (!activeName) return false;
+      const nb = getNameBlock(e);
+      for (const item of nb) {
+        const n = _normalizeName(item);
+        if (!n) continue;
+        if (n === activeName) return true;
+        if (activeName.indexOf(n) !== -1) return true;
+        if (n.indexOf(activeName + " ") === 0) return true;
+      }
+      return false;
+    }
+
+    function expandKeywordsInArray(keywords, entityDb, regex, dbgFunc) {
+      const expanded = [];
+      for (const keyword of keywords) {
+        const match = String(keyword).match(regex);
+        if (match) {
+          const entityName = match[1].toLowerCase();
+          const entity = entityDb[entityName];
+          if (entity) {
+            // Add the main name (which is the key)
+            expanded.push(entityName);
+            // Add aliases if they exist
+            if (Array.isArray(entity.aliases)) {
+              expanded.push(...entity.aliases);
+            }
+            dbgFunc(`Expanded '${keyword}' to include keywords for '${entityName}'.`);
+          } else {
+            dbgFunc(`Could not find entity for '${keyword}'. Ignoring.`);
+          }
+        } else {
+          // Not an entity keyword, just add it back
+          expanded.push(keyword);
+        }
+      }
+      // Using a Set to remove duplicates, then converting back to an array
+      return [...new Set(expanded)];
+    }
+
+    function expandEntityKeywords(loreBook, entityDb, dbgFunc) {
+      const entityKeywordRegex = /^char\.([a-z0-9_]+)$/i;
+      for (const entry of loreBook) {
+        if (entry.keywords && entry.keywords.length) {
+          entry.keywords = expandKeywordsInArray(entry.keywords, entityDb, entityKeywordRegex, dbgFunc);
+        }
+        if (entry.Shifts && entry.Shifts.length) {
+          for (const shift of entry.Shifts) {
+            if (shift.keywords && shift.keywords.length) {
+              shift.keywords = expandKeywordsInArray(shift.keywords, entityDb, entityKeywordRegex, dbgFunc);
+            }
+          }
+        }
+      }
+    }
+
+    function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+    function _hasTerm(haystack, term) {
+      const rawTerm = (term == null ? "" : String(term)).trim();
+      if (!rawTerm) return false;
+
+      if (rawTerm.charAt(rawTerm.length - 1) === "*") {
+        const stem = _normalizeText(rawTerm.slice(0, -1));
+        if (!stem) return false;
+        const re1 = new RegExp("(?:^|\\s)" + escapeRegex(stem) + "[a-z]*?(?=\\s|$)");
+        return re1.test(haystack);
+      }
+
+      const t = _normalizeText(rawTerm);
+      if (!t) return false;
+      const w = escapeRegex(t);
+      const re2 = new RegExp("(?:^|\\s)" + w + "(?=\\s|$)");
+      return re2.test(haystack);
+    }
+
+    function collectWordGates(e) {
+      // Helper to reduce repetition for current and 'prev.' scopes.
+      const getGateSet = (prefix = "") => {
+        const p = (key) => `${prefix}${key}`;
+        const r = (e && e[p('requires')]) ? e[p('requires')] : {};
+
+        const any = [].concat(
+          toArray(e && e[p('requireAny')]),
+          toArray(e && e[p('andAny')]),
+          toArray(r.any)
+        );
+        const all = [].concat(
+          toArray(e && e[p('requireAll')]),
+          toArray(e && e[p('andAll')]),
+          toArray(r.all)
+        );
+        const none = [].concat(
+          toArray(e && e[p('requireNone')]),
+          toArray(e && e[p('notAny')]),
+          toArray(r.none),
+          // getBlocklist is only for current scope; 'prev.' uses 'prev.block'.
+          prefix === "" ? toArray(getBlocklist(e)) : toArray(e && e[p('block')])
+        );
+        const nall = [].concat(toArray(e && e[p('notAll')]));
+
+        return { any, all, none, nall };
+      };
+
+      return {
+        current: getGateSet(),
+        previous: getGateSet('prev.')
+      };
+    }
+
+    function _checkWordGates(e) {
+      const g = collectWordGates(e);
+
+      const cur = g.current;
+      if (cur.any.length && !cur.any.some(w => _hasTerm(_currentHaystack, w))) return false;
+      if (cur.all.length && !cur.all.every(w => _hasTerm(_currentHaystack, w))) return false;
+      if (cur.none.length && cur.none.some(w => _hasTerm(_currentHaystack, w))) return false;
+      if (cur.nall.length && cur.nall.every(w => _hasTerm(_currentHaystack, w))) return false;
+
+      const prevScope = g.previous;
+      if (prevScope.any.length && !prevScope.any.some(w => _hasTerm(_previousHaystack, w))) return false;
+      if (prevScope.all.length && !prevScope.all.every(w => _hasTerm(_previousHaystack, w))) return false;
+      if (prevScope.none.length && prevScope.none.some(w => _hasTerm(_previousHaystack, w))) return false;
+      if (prevScope.nall.length && prevScope.nall.every(w => _hasTerm(_previousHaystack, w))) return false;
+
+      return true;
+    }
+
+    function _checkTagGates(e, activeTagsSet) {
+      const anyT = toArray(e && e.andAnyTags);
+      const allT = toArray(e && e.andAllTags);
+      const noneT = toArray(e && e.notAnyTags);
+      const nallT = toArray(e && e.notAllTags);
+      const hasT = t => !!activeTagsSet && activeTagsSet[String(t)] === 1;
+
+      if (anyT.length && !anyT.some(hasT)) return false;
+      if (allT.length && !allT.every(hasT)) return false;
+      if (noneT.length && noneT.some(hasT)) return false;
+      if (nallT.length && nallT.every(hasT)) return false;
+      return true;
+    }
+
+    function _checkIntentGates(e) {
+      // Map old keys for backward compatibility and gather all aliases.
+      // Support both 'intent.xxx' format and plain 'xxx' format
+      const normalizeIntent = (intentStr) => {
+        const s = String(intentStr).toLowerCase();
+        // Strip 'intent.' prefix if present
+        return s.startsWith('intent.') ? s.slice(7) : s;
+      };
+
+      const anyI = toArray(e && (e.requireAnyIntent || e.andAnyIntent || e.requireIntent)).map(normalizeIntent);
+      const allI = toArray(e && (e.requireAllIntent || e.andAllIntent)).map(normalizeIntent);
+      const noneI = toArray(e && (e.blockAnyIntent || e.notAnyIntent || e.blockIntent)).map(normalizeIntent);
+      const nallI = toArray(e && (e.blockAllIntent || e.notAllIntent)).map(normalizeIntent);
+
+      if (anyI.length === 0 && allI.length === 0 && noneI.length === 0 && nallI.length === 0) {
+        return true; // No intent gates, pass.
+      }
+
+      // Check if context.intents exists and is an object
+      const activeIntents = (context && typeof context.intents === 'object' && context.intents) ? context.intents : {};
+      const hasI = intent => activeIntents[String(intent).toLowerCase()] === true;
+
+      if (anyI.length > 0 && !anyI.some(hasI)) return false;
+      if (allI.length > 0 && !allI.every(hasI)) return false;
+      if (noneI.length > 0 && noneI.some(hasI)) return false;
+      if (nallI.length > 0 && nallI.every(hasI)) return false;
+
+      return true;
+    }
+
+    function _isAlwaysOn(e) {
+      const hasKW = !!(e && e.keywords && e.keywords.length);
+      const hasPrevKW = !!(e && e['prev.keywords'] && e['prev.keywords'].length);
+      const hasTag = !!(e && e.tag);
+      const hasMin = (e && e.minMessages != null);
+      const hasMax = (e && e.maxMessages != null);
+      return !hasKW && !hasPrevKW && !hasTag && !hasMin && !hasMax;
+    }
+
+    function _isEntryActive(e, activeTagsSet) {
+      if (!(messageCount >= getMin(e) && messageCount <= getMax(e))) return false;
+      if (_isNameBlocked(e)) return false;
+      if (!_checkWordGates(e)) return false;
+      if (!_checkTagGates(e, activeTagsSet || {})) return false;
+      if (!_checkIntentGates(e)) return false;
+      if (Math.random() > parseProbability(e && e.probability)) return false;
+      return true;
+    }
+
+    function resolveActiveEntities(currentText, lastMessages) {
+      // 1. Initialize Short-Term Memory
+      let memory = { M: null, F: null, N: null };
+      let activeEntities = new Set();
+
+      // Helper to update memory based on a text string
+      const scanTextForNames = (text) => {
+        const lower = text.toLowerCase();
+        for (const name in ENTITY_DB) {
+          if (Object.prototype.hasOwnProperty.call(ENTITY_DB, name)) {
+            // Use a word-boundary regex for more precise matching (e.g., "art" won't match "heart").
+            const nameRegex = new RegExp(`\\b${escapeRegex(name)}\\b`);
+            if (nameRegex.test(lower)) {
+              const meta = ENTITY_DB[name];
+              memory[meta.gender] = name; // Update "Last Mentioned Female", etc.
+              memory.N = name;            // Update "Last Mentioned Entity"
+
+              // If this is the current text, mark this entity as Active
+              if (text === currentText) activeEntities.add(name);
+            }
+          }
+        }
+      };
+
+      // 2. Scan History (Oldest -> Newest) to build state
+      if (lastMessages && Array.isArray(lastMessages)) {
+        for (const msg of lastMessages) {
+          const msgText = (msg && typeof msg.message === 'string') ? msg.message : _toString(msg);
+          scanTextForNames(msgText);
+        }
+      }
+
+      // 3. Scan Current Text for Names (Overrides history)
+      scanTextForNames(currentText);
+
+      // 4. Resolve Pronouns in Current Text
+      const lowerCurrent = currentText.toLowerCase();
+      const words = lowerCurrent.split(/\W+/); // Split by non-word chars
+
+      for (const word of words) {
+        if (PRONOUN_MAP[word]) {
+          const gender = PRONOUN_MAP[word];
+          const target = memory[gender] || memory.N; // Try gender match, fallback to neutral/last
+
+          if (target) {
+            activeEntities.add(target);
+            dbg(`Coreference: '${word}' -> ${target}`);
+          }
+        }
+      }
+
+      return Array.from(activeEntities);
+    }
+
+    function getDynamicRelationshipLore(activeTagsSet) {
+      const lastMessages = (_lmArr || []).map(item => (item && typeof item.message === "string") ? item.message : _toString(item));
+      const activeEntities = resolveActiveEntities(CHAT_WINDOW.text_last_only, lastMessages);
+
+      if (activeEntities.length < 2) return []; // Need 2 people for a relationship
+
+      let injections = [];
+
+      for (const trigger of RELATIONSHIP_DB) {
+        // 1. Check if both entities are present
+        const hasPair = trigger.pair.every(name => activeEntities.includes(name));
+
+        if (hasPair) {
+          // 2. Check for required tags
+          const requireTags = toArray(trigger.requireTags);
+          if (requireTags.length === 0) continue;
+          const hasTags = requireTags.every(t => hasTag(activeTagsSet, t));
+
+          if (hasTags) {
+            dbg(`Relationship Trigger: ${trigger.pair.join('+')}`);
+            injections.push({
+              injection: trigger.injection,
+              group: trigger.group || null
+            });
+          }
+        }
+      }
+      return injections;
+    }
+
+    function compileAuthorLore(authorLore, entityDb) {
+      let src = Array.isArray(authorLore) ? authorLore.slice() : [];
+
+      if (entityDb) {
+        for (const entityName in entityDb) {
+          if (Object.prototype.hasOwnProperty.call(entityDb, entityName)) {
+            const entity = entityDb[entityName];
+            if (entity.lore && Array.isArray(entity.lore)) {
+              src = src.concat(entity.lore);
+            }
+          }
+        }
+      }
+
+      const out = new Array(src.length);
+      for (const [i, entry] of src.entries()) {
+        out[i] = normalizeEntry(entry);
+      }
+      return out;
+    }
+    function normalizeEntry(e) {
+      if (!e) return {};
+      const out = {};
+      for (const k in e) if (Object.prototype.hasOwnProperty.call(e, k)) out[k] = e[k];
+      out.keywords = Array.isArray(e.keywords) ? e.keywords.slice(0) : [];
+      if (Array.isArray(e.Shifts) && e.Shifts.length) {
+        const shArr = new Array(e.Shifts.length);
+        for (const [i, shift] of e.Shifts.entries()) {
+          const sh = shift || {};
+          const shOut = {};
+          for (const sk in sh) if (Object.prototype.hasOwnProperty.call(sh, sk)) shOut[sk] = sh[sk];
+          shOut.keywords = Array.isArray(sh.keywords) ? sh.keywords.slice(0) : [];
+          shArr[i] = shOut;
+        }
+        out.Shifts = shArr;
+      } else if (out.hasOwnProperty("Shifts")) {
+        delete out.Shifts;
+      }
+      return out;
+    }
+
+    /* ============================================================================
+       [SECTION] COMPILATION
+       DO NOT EDIT: Behavior-sensitive
+       ========================================================================== */
+    //#region COMPILATION
+    const _ENGINE_LORE = compileAuthorLore(typeof DYNAMIC_LORE !== "undefined" ? DYNAMIC_LORE : [], typeof ENTITY_DB !== "undefined" ? ENTITY_DB : {});
+
+    // Expand `char.entity` keywords into their full alias lists.
+    expandEntityKeywords(_ENGINE_LORE, ENTITY_DB, dbg);
+
+
+    /* ============================================================================
+       [SECTION] SELECTION PIPELINE
+       DO NOT EDIT: Behavior-sensitive
+       ========================================================================== */
+    //#region SELECTION_PIPELINE
+    // --- State -------------------------------------------------------------------
+    const buckets = [null, [], [], [], [], []];
+    const picked = new Array(_ENGINE_LORE.length).fill(0);
+    const inclusionGroups = {}; // For mutual exclusion
+
+    function makeTagSet() { return Object.create(null); }
+    const trigSet = makeTagSet();
+    const postShiftTrigSet = makeTagSet();
+
+    function addTag(set, key) { set[String(key)] = 1; }
+    function hasTag(set, key) { return set[String(key)] === 1; }
+
+    // --- 1) Direct pass ----------------------------------------------------------
+    for (const [i1, e1] of _ENGINE_LORE.entries()) {
+      const hit = _isAlwaysOn(e1) || getKeywords(e1).some(kw => _hasTerm(_currentHaystack, kw)) || toArray(e1['prev.keywords']).some(kw => _hasTerm(_previousHaystack, kw));
+      if (!hit) continue;
+      if (!_isEntryActive(e1, undefined)) { dbg(`filtered entry[${i1}]`); continue; }
+      buckets[getPriority(e1)].push(i1);
+      picked[i1] = 1;
+      const trg1 = getTriggers(e1);
+      for (const tag of trg1) {
+        addTag(trigSet, tag);
+      }
+      dbg(`hit entry[${i1}] p=${getPriority(e1)}`);
+    }
+
+    // --- 2) Trigger pass ---------------------------------------------------------
+    for (const [i2, e2] of _ENGINE_LORE.entries()) {
+      if (picked[i2]) continue;
+      if (!(e2 && e2.tag && hasTag(trigSet, e2.tag))) continue;
+      if (!_isEntryActive(e2, trigSet)) { dbg(`filtered triggered entry[${i2}]`); continue; }
+      buckets[getPriority(e2)].push(i2);
+      picked[i2] = 1;
+      const trg2 = getTriggers(e2);
+      for (const tag of trg2) {
+        addTag(trigSet, tag);
+      }
+      dbg(`triggered entry[${i2}] p=${getPriority(e2)}`);
+    }
+
+    // --- 3) Priority selection (capped) -----------------------------------------
+    const selected = [];
+    let pickedCount = 0;
+    const applyLimit = (typeof APPLY_LIMIT === "number" && APPLY_LIMIT >= 1) ? APPLY_LIMIT : 99999;
+
+    for (let p = 5; p >= 1 && pickedCount < applyLimit; p--) {
+      const bucket = buckets[p];
+      for (const item of bucket) {
+        if (pickedCount >= applyLimit) break;
+
+        // NEW: Inclusion group logic
+        // To use this, add a `group` property to your lore entries.
+        // Entries sharing a group name will be mutually exclusive.
+        const entry = _ENGINE_LORE[item];
+        // v14 lore entries don't have 'id' by default, so we rely on the 'group' property.
+        const group = entry.group || (entry.id ? String(entry.id).split('_')[0] : null);
+        if (group) {
+          if (inclusionGroups[group]) {
+            dbg(`Skipping entry in group '${group}' because an entry from this group was already selected.`);
+            continue;
+          }
+          inclusionGroups[group] = true;
+        }
+
+        selected.push(item);
+        pickedCount++;
+      }
+    }
+    if (pickedCount === applyLimit) dbg("APPLY_LIMIT reached");
+
+    /* ============================================================================
+       [SECTION] APPLY + SHIFTS + POST-SHIFT
+       DO NOT EDIT: Behavior-sensitive
+       ========================================================================== */
+    //#region APPLY_AND_SHIFTS
+    let personalityBuffer = "";
+    let scenarioBuffer = "";
+
+    for (const idx of selected) {
+      const e3 = _ENGINE_LORE[idx];
+      if (e3 && e3.personality) personalityBuffer += `\n\n${e3.personality}`;
+      if (e3 && e3.scenario) scenarioBuffer += `\n\n${e3.scenario}`;
+      if (!(e3 && Array.isArray(e3.Shifts) && e3.Shifts.length)) continue;
+
+      for (const sh of e3.Shifts) {
+        const activated = _isAlwaysOn(sh) || getKeywords(sh).some(kw => _hasTerm(_currentHaystack, kw)) || toArray(sh['prev.keywords']).some(kw => _hasTerm(_previousHaystack, kw));
+        if (!activated) continue;
+
+        const trgSh = getTriggers(sh);
+        for (const tag of trgSh) {
+          addTag(postShiftTrigSet, tag);
+        }
+
+        if (!_isEntryActive(sh, trigSet)) { dbg("shift filtered"); continue; }
+
+        if (sh.personality) personalityBuffer += `\n\n${sh.personality}`;
+        if (sh.scenario) scenarioBuffer += `\n\n${sh.scenario}`;
+      }
+    }
+
+    // --- Post-shift triggers -----------------------------------------------------
+    const unionTags = (() => {
+      const dst = makeTagSet();
+      for (const k in trigSet) if (trigSet[k] === 1) dst[k] = 1;
+      for (const k in postShiftTrigSet) if (postShiftTrigSet[k] === 1) dst[k] = 1;
+      return dst;
+    })();
+
+    for (const [i3, e4] of _ENGINE_LORE.entries()) {
+      if (picked[i3]) continue;
+      if (!(e4 && e4.tag && hasTag(postShiftTrigSet, e4.tag))) continue;
+      if (!_isEntryActive(e4, unionTags)) { dbg(`post-filter entry[${i3}]`); continue; }
+      if (e4.personality) personalityBuffer += `\n\n${e4.personality}`;
+      if (e4.scenario) scenarioBuffer += `\n\n${e4.scenario}`;
+      dbg(`post-shift triggered entry[${i3}] p=${getPriority(e4)}`);
+    }
+
+    // --- Dynamic Relationship Injections ---------------------------------------
+    const relationshipInjections = getDynamicRelationshipLore(unionTags);
+    if (relationshipInjections.length > 0) {
+      for (const injectionObj of relationshipInjections) {
+        const group = injectionObj.group;
+        if (group) {
+          if (inclusionGroups[group]) {
+            dbg(`Skipping relationship injection in group '${group}' due to exclusion.`);
+            continue;
+          }
+          inclusionGroups[group] = true;
+        }
+        personalityBuffer += `\n\n${injectionObj.injection}`;
+      }
+    }
+
+    /* ============================================================================
+       [SECTION] FLUSH
+       DO NOT EDIT: Behavior-sensitive
+       ========================================================================== */
+    //#region FLUSH
+    if (personalityBuffer) context.character.personality += personalityBuffer;
+    if (scenarioBuffer) context.character.scenario += scenarioBuffer;
+    //#endregion
+  }) ();
