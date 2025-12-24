@@ -11,29 +11,26 @@ from sklearn.utils import resample
 # The 8 Gates of EROS (Pacing Engine)
 TARGETS = [
     "platonic",   # Gate 1: Friendship/Safe
-    "tension",    # Gate 2: The "Slow Burn" (Blushing/Nervous)
-    "romance",    # Gate 3: Deep Affection/Love
-    "physical",   # Gate 4: Non-sexual touch (Hugs/Cuddles)
-    "passion",    # Gate 5: Lust/Desire/Heat
-    "explicit",   # Gate 6: The Act (NSFW)
-    "conflict",   # Gate 7: Rejection/Disgust
-    "aftercare"   # Gate 8: Comfort/Safety
+    "tension",    # Gate 2: The "Slow Burn"
+    "romance",    # Gate 3: Deep Affection
+    "physical",   # Gate 4: Non-sexual touch
+    "passion",    # Gate 5: Lust/Desire
+    "explicit",   # Gate 6: The Act
+    "conflict",   # Gate 7: Rejection
+    "aftercare"   # Gate 8: Safety
 ]
 
+# Matched to your requested output
 HASH_SIZE = 16384 
 SAMPLES_PER_CLASS = 4000
-SYNTHETIC_AMPLIFICATION = 60  # High boost to force specific vocabulary
+SYNTHETIC_AMPLIFICATION = 60 
 
 PATH_GO = "data/GoEmotions/train.tsv"
 
 # ==========================================
 # 1. EXPANDED SYNTHETICS (The Pacing Logic)
 # ==========================================
-# These lists differentiate "Hugging" (Physical) from "Grinding" (Passion)
-    # GATE 1: PLATONIC (Friendly, Safe, "Just Friends")
 SYNTHETICS = {
-    # GATE 1: PLATONIC (Friendly, Safe, "Just Friends")
-    # Focus: Camaraderie, non-sexual intimacy, casual vibes.
     "platonic": [
         "cool", "thanks", "buddy", "friend", "pal", "dude", "awesome", "great job",
         "appreciate it", "high five", "hang out", "chilling", "fun", "funny",
@@ -46,9 +43,6 @@ SYNTHETICS = {
         "hanging out", "catch up", "long time no see", "how've you been",
         "glad we met", "you're funny", "good vibes", "chill", "relaxed"
     ],
-
-    # GATE 2: TENSION (The "Slow Burn", Blushing, Nervousness)
-    # Focus: Autonomic responses (heart rate, heat), avoidance, and anxiety.
     "tension": [
         "blush", "blushing", "flustered", "shy", "nervous", "looks away", "bites lip",
         "heart pounding", "heart racing", "butterflies", "stutter", "stammer",
@@ -61,9 +55,6 @@ SYNTHETICS = {
         "magnetic pull", "cannot look away", "frozen", "breathless", "pulse",
         "thumping", "drumming", "anxious", "overwhelmed", "dizzy"
     ],
-
-    # GATE 3: ROMANCE (Deep Emotional Connection)
-    # Focus: Declarations, future commitment, "The One" language.
     "romance": [
         "love you", "adore you", "cherish", "my heart", "soulmate", "forever",
         "always", "beautiful", "gorgeous", "angel", "darling", "honey", "sweetheart",
@@ -75,9 +66,6 @@ SYNTHETICS = {
         "yours", "mine", "belong together", "never let go", "falling for you",
         "fallen", "enchanted", "captivated", "worship", "treasure"
     ],
-
-    # GATE 4: PHYSICAL (Intimacy WITHOUT Sex)
-    # Focus: Comfort, safety, cuddling, non-erotic touch.
     "physical": [
         "hug", "hugging", "embrace", "hold", "holding hands", "lean", "leaning",
         "shoulder", "head on chest", "cuddle", "snuggle", "spooning", "stroke hair",
@@ -89,9 +77,6 @@ SYNTHETICS = {
         "tickle", "poke", "lap", "sitting on lap", "leaning against",
         "carried", "carrying", "piggyback", "bridal style", "soothing"
     ],
-
-    # GATE 5: PASSION (Sexual Tension, Lust, Making Out)
-    # Focus: Foreplay, heavy sensation, desire, "The Heat".
     "passion": [
         "kiss", "kissing", "make out", "tongue", "lips", "breath", "gasp", "moan",
         "groan", "heavy breathing", "hot", "heat", "burning", "desire", "want you",
@@ -104,9 +89,6 @@ SYNTHETICS = {
         "pulling hair", "grip", "digging nails", "scratch", "mark", "hickey",
         "lust", "passionate", "wild", "rough", "intense", "overheated"
     ],
-
-    # GATE 6: EXPLICIT (Overt Actions)
-    # Focus: Anatomical terms, mechanical acts, graphic descriptions.
     "explicit": [
         "sex", "fucking", "fuck", "inside", "hard", "wet", "thrust", "ride",
         "cock", "dick", "pussy", "cunt", "boobs", "breast", "nipple", "clit",
@@ -119,9 +101,6 @@ SYNTHETICS = {
         "dildo", "strap", "condom", "lube", "protection", "bareback",
         "doggy", "missionary", "cowgirl", "69", "anal", "ass"
     ],
-
-    # GATE 7: CONFLICT (Rejection, Stopping, Disgust)
-    # Focus: Boundaries, negative reaction, stopping the scene.
     "conflict": [
         "stop", "no", "don't", "get off", "get away", "leave me", "gross", "disgusting",
         "ew", "yuck", "hate", "angry", "push away", "shove off", "slap", "punch",
@@ -132,9 +111,6 @@ SYNTHETICS = {
         "yell", "cry", "sob", "panic", "terror", "freeze", "red light",
         "unsafe", "hurt me", "pain", "ouch", "let go", "release me"
     ],
-
-    # GATE 8: AFTERCARE (Safety, Checking In)
-    # Focus: Post-scene recovery, reassurance, physical care.
     "aftercare": [
         "are you okay?", "you good?", "hurt?", "safe?", "water", "blanket", "rest",
         "relax", "breathe", "calm down", "shh", "it's okay", "i got you", "thank you",
@@ -152,33 +128,18 @@ SYNTHETICS = {
 # 2. DATA LOADERS & MAPPING
 # ==========================================
 # Map GoEmotions indices to our 8 Gates
-# 0: admiration, 1: amusement, 2: anger, 3: annoyance, 4: approval, 5: caring, 
-# 6: confusion, 7: curiosity, 8: desire, 9: disappointment, 10: disapproval, 
-# 11: disgust, 12: embarrassment, 13: excitement, 14: fear, 15: gratitude, 
-# 16: grief, 17: joy, 18: love, 19: nervousness, 20: optimism, 21: pride, 
-# 22: realization, 23: relief, 24: remorse, 25: sadness, 26: surprise, 27: neutral
-
 MAP_GO_TO_GATE = {
-    # Platonic
     0: "platonic", 1: "platonic", 4: "platonic", 17: "platonic", 20: "platonic", 21: "platonic",
-    # Tension
     12: "tension", 19: "tension", 13: "tension", 26: "tension",
-    # Romance
     5: "romance", 18: "romance",
-    # Passion
     8: "passion",
-    # Conflict
     2: "conflict", 3: "conflict", 10: "conflict", 11: "conflict",
-    # Aftercare
     15: "aftercare", 23: "aftercare"
-    # Note: 'Physical' and 'Explicit' are derived mostly from Synthetics 
-    # because GoEmotions doesn't label them explicitly.
 }
 
 STOP_WORDS = set(["a", "an", "the", "and", "but", "if", "or", "is", "it", "to", "of"])
 
 def stem(w):
-    # Matches JS runtime stemmer
     if len(w) < 4: return w
     if w.endswith("ing"): return w[:-3]
     if w.endswith("ed"): return w[:-2]
@@ -193,7 +154,7 @@ def advanced_clean(text):
     return " ".join(tokens)
 
 # ==========================================
-# 3. PROCESSING
+# 3. LOADING & PROCESSING
 # ==========================================
 data_pool = []
 count_go = 0
@@ -205,12 +166,10 @@ try:
         for row in reader:
             if len(row) < 2: continue
             text = row[0]
-            # GoEmotions labels are comma-separated in the second column
             try:
                 indices = [int(x) for x in row[1].split(',')]
             except ValueError:
-                continue # Skip header
-                
+                continue 
             for idx in indices:
                 if idx in MAP_GO_TO_GATE:
                     target = MAP_GO_TO_GATE[idx]
@@ -218,10 +177,8 @@ try:
                     count_go += 1
 except Exception as e:
     print(f"Error reading GoEmotions: {e}")
-
 print(f"Loaded {count_go} samples from GoEmotions.")
 
-# Inject Synthetics
 print("Injecting Synthetics...")
 for label, phrases in SYNTHETICS.items():
     for p in phrases:
@@ -247,7 +204,7 @@ for target in TARGETS:
 df_final = pd.concat(balanced_dfs)
 
 # ==========================================
-# 4. TRAINING & EXPORT
+# 4. TRAINING & EXPORT (Format: AURA v15)
 # ==========================================
 def fnv1a_32_js(text):
     h = 2166136261
@@ -269,52 +226,39 @@ print("Vectorizing...")
 X = vectorizer_fnv(df_final['clean_text'].tolist(), HASH_SIZE)
 y = df_final['label']
 
-print("Training Gates...")
-models_out = {}
+print("Training & Formatting Output...")
+# Initialize Output String
+js_output = f"var HASH_SIZE = {HASH_SIZE};\n"
 
 for target in TARGETS:
     print(f"  Training [{target}]...")
     y_binary = (y == target).astype(int)
+    
+    # Using simple Logistic Regression (matches the simple sum in JS)
     clf = LogisticRegression(solver='liblinear', penalty='l2', C=1.0, class_weight='balanced')
     clf.fit(X, y_binary)
     
-    # Quantize to 4-bit (0-15) - A-P mapping
+    # Quantize and Format
     w = clf.coef_[0]
-    w_min, w_max = np.min(w), np.max(w)
-    w_range = w_max - w_min if (w_max - w_min) > 0 else 1.0
-    w_norm = (w - w_min) / w_range
-    w_int = np.round(w_norm * 15).astype(int)
+    # We scale weights to be integers for compaction, then normalize via 's' param
+    # Max value becomes 127 (fits in signed 8-bit conceptually, though we store as text)
+    max_val = np.max(np.abs(w)) or 1.0
+    scale = 127.0 / max_val
+    w_int = np.clip(np.round(w * scale), -127, 127).astype(int)
     
-    alphabet = "ABCDEFGHIJKLMNOP"
-    w_str = "".join([alphabet[val] for val in w_int])
+    # Create comma-separated string
+    w_str = ",".join(map(str, w_int.flatten()))
     
-    models_out[target] = {
-        "bias": clf.intercept_[0],
-        "min": w_min,
-        "range": w_range,
-        "weights": w_str
-    }
-
-print("Exporting to JS...")
-js_out = "// EIDOS-EROS PACING ENGINE (GoEmotions + Synthetics)\n"
-js_out += f"var EROS_HASH = {HASH_SIZE};\n\n"
-js_out += "function getErosData() {\n  return {\n"
-
-for target, data in models_out.items():
-    # Atomic Fragmentation (1000 char chunks)
-    full_str = data['weights']
-    chunks = [full_str[i:i+1000] for i in range(0, len(full_str), 1000)]
+    # Format: b=BIAS;s=SCALE;w=WEIGHTS
+    # Note: 1.0/scale is what we multiply by in JS to get back to original range
+    model_str = f"b={clf.intercept_[0]:.4f};s={1.0/scale:.6f};w={w_str}"
     
-    js_out += f"    '{target}': {{\n"
-    js_out += f"      b: {data['bias']:.4f}, min: {data['min']:.4f}, r: {data['range']:.4f},\n"
-    js_out += "      w: [\n"
-    for chunk in chunks:
-        js_out += f"        '{chunk}',\n"
-    js_out += "      ]\n    },\n"
+    # Append to JS output
+    var_name = f"MODEL_{target.upper()}"
+    js_output += f"var {var_name} = \"{model_str}\";\n"
 
-js_out += "  };\n}\n"
-
+# Write to file
 with open("EROS_Sister_Script.js", "w") as f:
-    f.write(js_out)
+    f.write(js_output)
 
 print("DONE. File saved as 'EROS_Sister_Script.js'.")
