@@ -248,6 +248,147 @@ Describe new area. Update SAVE with new LOC.`,
   },
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MONSTER INFORMATION (Individual lookups)
+// ═══════════════════════════════════════════════════════════════════════════
+
+  {
+    keywords: ["slime"],
+    priority: 3,
+    personality: `Slime - The iconic beginner enemy of Dragon Quest. A cute blue blob monster.
+Stats: HP 3, ATK 5, DEF 2 | Rewards: 2 Gold, 1 EXP
+Common in early areas around Tantegel Castle.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Slime`,
+    scenario: "A beginner enemy from the Dragon Quest series."
+  },
+
+  {
+    keywords: ["red slime"],
+    priority: 3,
+    personality: `Red Slime - A stronger variant of the basic Slime.
+Stats: HP 4, ATK 7, DEF 3 | Rewards: 3 Gold, 2 EXP
+Found in areas near Brecconary.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Red_slime`,
+    scenario: "A red-colored slime, slightly stronger than its blue cousin."
+  },
+
+  {
+    keywords: ["drakee"],
+    priority: 3,
+    personality: `Drakee - A small dragon-like creature with bat wings.
+Stats: HP 6, ATK 9, DEF 6 | Rewards: 5 Gold, 3 EXP
+Zone 1 enemy, common in early exploration.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Drakee`,
+    scenario: "A bat-winged dragon creature that swoops at travelers."
+  },
+
+  {
+    keywords: ["ghost"],
+    priority: 3,
+    personality: `Ghost - An undead specter that haunts the wilderness.
+Stats: HP 7, ATK 11, DEF 8 | Rewards: 8 Gold, 4 EXP
+Zone 2 enemy, appears in mid-level areas.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Ghost_(Dragon_Quest)`,
+    scenario: "A ghostly apparition that phases in and out."
+  },
+
+  {
+    keywords: ["magician"],
+    priority: 3,
+    personality: `Magician - A spell-casting enemy that can use HURT magic.
+Stats: HP 13, ATK 15, DEF 12 | Rewards: 18 Gold, 13 EXP
+Zone 2 enemy. Can cast attack spells - dangerous!
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Magician_(Dragon_Quest)`,
+    scenario: "A robed spellcaster wielding offensive magic."
+  },
+
+  {
+    keywords: ["scorpion"],
+    priority: 3,
+    personality: `Scorpion - A giant armored scorpion with a deadly stinger.
+Stats: HP 20, ATK 18, DEF 16 | Rewards: 26 Gold, 16 EXP
+Zone 3 enemy found in desert and rocky areas.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Scorpion`,
+    scenario: "A massive scorpion with chitinous armor."
+  },
+
+  {
+    keywords: ["druin"],
+    priority: 3,
+    personality: `Druin - A shadowy demon creature.
+Stats: HP 22, ATK 20, DEF 18 | Rewards: 30 Gold, 18 EXP
+Zone 3 enemy, relatively strong mid-game foe.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Druin`,
+    scenario: "A dark, demonic creature lurking in shadows."
+  },
+
+  {
+    keywords: ["metal slime"],
+    priority: 3,
+    personality: `Metal Slime - The legendary rare enemy! Extremely high defense, very low HP.
+Stats: HP 4, ATK 10, DEF 255 | Rewards: 6 Gold, 115 EXP
+EXTREMELY RARE (2% encounter rate). Often flees before you can defeat it.
+Defeating one grants massive experience! Very hard to damage due to extreme defense.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Metal_slime`,
+    scenario: "The legendary metal slime - a shimmering metallic blob worth massive EXP!"
+  },
+
+  {
+    keywords: ["knight"],
+    priority: 3,
+    personality: `Knight - A heavily armored warrior enemy.
+Stats: HP 37, ATK 40, DEF 40 | Rewards: 70 Gold, 42 EXP
+Zone 7 enemy. Late-game foe with strong offense and defense.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Knight_(Dragon_Quest)`,
+    scenario: "An armored knight wielding sword and shield."
+  },
+
+  {
+    keywords: ["magiwyvern"],
+    priority: 3,
+    personality: `Magiwyvern - A magical dragon that can breathe fire!
+Stats: HP 49, ATK 56, DEF 50 | Rewards: 105 Gold, 58 EXP
+Zone 7 enemy. Fire breath attacks deal heavy damage.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Magiwyvern`,
+    scenario: "A wyvern crackling with magical energy and flames."
+  },
+
+  {
+    keywords: ["demon knight"],
+    priority: 3,
+    personality: `Demon Knight - A corrupted knight infused with demonic power.
+Stats: HP 47, ATK 60, DEF 54 | Rewards: 110 Gold, 78 EXP
+Zone 7 enemy. One of the strongest regular enemies in the game.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Demon_knight`,
+    scenario: "A knight possessed by demonic forces, radiating dark energy."
+  },
+
+  {
+    keywords: ["dragonlord"],
+    priority: 3,
+    personality: `Dragonlord - The final boss! Has TWO forms.
+Form 1: HP 100, ATK 90, DEF 75 (humanoid mage)
+Form 2: HP 165, ATK 140, DEF 90 (dragon form with fire breath)
+Rewards: 0 Gold, 2000 EXP (form 2 only)
+
+The ultimate evil that stole the Ball of Light and kidnapped Princess Gwaelin.
+Resides in Charlock Castle. Only accessible with the Rainbow Drop.
+
+Gather additional information from https://dragonquest.fandom.com/wiki/Dragonlord`,
+    scenario: "The supreme villain of Dragon Quest I - the Dragonlord himself!"
+  },
+
+// ═══════════════════════════════════════════════════════════════════════════
 // RANDOM ENCOUNTERS (Triggered by movement tag)
 // ═══════════════════════════════════════════════════════════════════════════
 
