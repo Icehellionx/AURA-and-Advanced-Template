@@ -94,6 +94,37 @@ const LEVEL_THRESHOLDS = {
 };
 
 /* ============================================================================
+   [SECTION] ASCII ART DATABASE
+   ========================================================================== */
+//#region ASCII_ART
+
+const ASCII_ART = {
+    // Monsters
+    SLIME: "  ___\n /o o\\\n|  ~  |\n \\___/",
+    RED_SLIME: "  ___\n /@ @\\\n|  ~  |\n \\___/",
+    DRAKEE: "  ^  \n < >\n  V  ",
+    GHOST: "  .--.\n ( o o )\n  >   <\n '-----'",
+    DRAGON: "   /\\___/\\\n  {  o_o  }\n   \\  ^  /\n   /|||||\\\n  /_\\|||/_\\",
+    DRAGONLORD: "    ___\n   /   \\\n  | @ @ |\n  |  ^  |\n  /HHHHH\\\n <XXXXXXX>\n  \\____/",
+
+    // Locations
+    CASTLE: "    /\\\n   /  \\\n  /====\\\n /| [] |\\\n/_|____|_\\",
+    TOWN: " ___ ___\n|::::|:::|\n|_ _|_ _|\n|::::|:::|",
+    CAVE: "   ___\n  /   \\\n /     \\\n|   _   |\n| _| |_ |",
+    OVERWORLD: " ~  ~ ~\n  ~  ~  ~\n ~  ~ ~",
+
+    // Items
+    SWORD: "  /\\\n  ||\n  ||\n /||\\\n/____\\",
+    HERB: " \\|/\n -+-\n /|\\",
+    KEY: " __\n( )|\n \\_|_",
+    CROWN: "  /\\_/\\\n |o o|\n  \\_/",
+
+    // Special
+    TOMBSTONE: "    ___\n   /R.I.P\\\n  |_______|",
+    CHEST: " ____\n|    |\n|____|\n \\__/"
+};
+
+/* ============================================================================
    [SECTION] GAME LOGIC ENTRIES
    ========================================================================== */
 //#region AUTHOR_ENTRIES
@@ -146,256 +177,94 @@ Available commands:
 
   /* STATS Command */
   {
-    keywords: ["stats", "status", "check status", "my stats"],
+    keywords: ["stats", "status"],
     priority: 5,
-    personality: `
-╔════════════════════════════════════════╗
-║           HERO STATUS                  ║
-╠════════════════════════════════════════╣
-║ Level: [Extract LVL from last SAVE]   ║
-║ HP: [Extract HP from last SAVE]       ║
-║ MP: [Extract MP from last SAVE]       ║
-║ Gold: [Extract GOLD from last SAVE]   ║
-║ Experience: [Extract EXP from SAVE]   ║
-║ To Next Lv: [Calculate based on LVL]  ║
-╠════════════════════════════════════════╣
-║ Weapon: [Extract EQP_W from SAVE]     ║
-║ Armor: [Extract EQP_A from SAVE]      ║
-║ Shield: [Extract EQP_S from SAVE]     ║
-║ Magic Keys: [Extract KEYS from SAVE]  ║
-╠════════════════════════════════════════╣
-║ Inventory:                             ║
-║ [Extract INV from SAVE and list]      ║
-╚════════════════════════════════════════╝
-
-[Reprint current SAVE block]
-`,
-    scenario: "The hero reviews their current status."
+    personality: `Display stats box with: LVL, HP, MP, GOLD, EXP, EXP to next, equipped gear, keys, inventory. Then print SAVE.`,
+    scenario: "Status check."
   },
 
   /* SEARCH Command */
   {
-    keywords: ["search", "look around", "examine", "investigate"],
+    keywords: ["search", "look", "examine"],
     priority: 4,
     triggers: ["searching"],
-    personality: `The hero carefully searches the area.
-
-[Based on current LOC in SAVE:]
-- If in throne room: "The throne room is ornately decorated. Stairs lead down to the basement."
-- If in courtyard: "A magical spring bubbles in the center. Legend says it can heal wounds."
-- If in town: "Townspeople go about their business. Shops display their wares."
-- If in cave/dungeon: "Dark passages stretch in multiple directions. You hear monsters in the distance."
-- If on overworld: "The wilderness stretches before you. You can see [nearby locations]."
-
-[Reprint current SAVE block]
-`,
-    scenario: "The hero examines their surroundings carefully."
+    personality: `Search area. Show ASCII for location. Describe details, exits, items. Print SAVE.`,
+    scenario: "Examining surroundings."
   },
 
   /* TALK Command */
   {
-    keywords: ["talk", "speak", "chat", "ask"],
+    keywords: ["talk", "speak"],
     priority: 4,
     triggers: ["talking"],
-    personality: `The hero approaches to speak.
-
-[Based on LOC in SAVE and FLAGS:]
-
-TANTEGEL_THRONE + !PRINCESS_SAVED:
-King Lorik: "Please save the Princess! She was taken to a cave somewhere."
-
-TANTEGEL_THRONE + PRINCESS_SAVED:
-King Lorik: "Thank you for saving Gwaelin! Now thou must defeat the Dragonlord!"
-
-BRECCONARY:
-Villager: "Welcome to Brecconary! Buy weapons at the shop to the north."
-Old Man: "Death should not be feared, but it is dark beyond the horizon..."
-
-GARINHAM:
-Guard: "Thou cannot enter Charlock Castle without the Rainbow Drop!"
-Merchant: "The legendary Erdrick once saved this land long ago."
-
-[Reprint current SAVE block]
-`,
-    scenario: "The hero engages in conversation."
-  },
-
-  /* MOVEMENT - GO Command */
-  {
-    keywords: ["go north", "north", "walk north", "move north"],
-    priority: 5,
-    triggers: ["movement", "moved_north"],
-    personality: `The hero walks north.
-
-[Check current LOC in SAVE, look up valid exits]
-[If north is valid exit: Update LOC to new location, describe it]
-[If not valid: "Thou cannot go that way!"]
-
-[Print new location description from LOCATIONS]
-
-[Update SAVE with new LOC]
-[Reprint updated SAVE block]
-`,
-    scenario: "The hero moves northward."
+    personality: `NPC dialogue based on LOC and FLAGS. King if TANTEGEL_THRONE, townspeople if town. Print SAVE.`,
+    scenario: "Conversation."
   },
 
   {
-    keywords: ["go south", "south", "walk south", "move south"],
+    keywords: ["north", "go north"],
     priority: 5,
-    triggers: ["movement", "moved_south"],
-    personality: `The hero walks south.
-
-[Check current LOC in SAVE, update accordingly]
-[Describe new location]
-[Reprint SAVE with updated LOC]
-
-[If moving to overworld from town/castle: possible random encounter!]
-`,
-    scenario: "The hero moves southward."
+    triggers: ["movement"],
+    personality: `Move north. Update LOC, show new area. 30% encounter if dangerous. Print SAVE.`,
+    scenario: "North."
   },
-
   {
-    keywords: ["go east", "east", "walk east", "move east"],
+    keywords: ["south", "go south"],
     priority: 5,
-    triggers: ["movement", "moved_east"],
-    personality: `The hero walks east.
-
-[Update LOC, describe new location]
-[Reprint SAVE]
-`,
-    scenario: "The hero moves eastward."
+    triggers: ["movement"],
+    personality: `Move south. Update LOC, show new area. 30% encounter if dangerous. Print SAVE.`,
+    scenario: "South."
   },
-
   {
-    keywords: ["go west", "west", "walk west", "move west"],
+    keywords: ["east", "go east"],
     priority: 5,
-    triggers: ["movement", "moved_west"],
-    personality: `The hero walks west.
-
-[Update LOC, describe new location]
-[Reprint SAVE]
-`,
-    scenario: "The hero moves westward."
+    triggers: ["movement"],
+    personality: `Move east. Update LOC, show new area. 30% encounter if dangerous. Print SAVE.`,
+    scenario: "East."
+  },
+  {
+    keywords: ["west", "go west"],
+    priority: 5,
+    triggers: ["movement"],
+    personality: `Move west. Update LOC, show new area. 30% encounter if dangerous. Print SAVE.`,
+    scenario: "West."
   },
 
 // 🟢🟢🟢 COMBAT SYSTEM 🟢🟢🟢
 
-  /* Random Encounter (triggered by movement in dangerous areas) */
   {
     tag: "movement",
     priority: 4,
-    andAny: ["overworld", "swamp", "mountains", "cave", "dungeon"],
+    andAny: ["overworld", "swamp", "cave"],
     probability: 0.3,
     triggers: ["combat_start"],
-    personality: `
-⚔️ A MONSTER APPEARS! ⚔️
-
-[Based on LOC and LVL, spawn appropriate monster]
-[Early areas: Slime, Drakee, Ghost]
-[Mid areas: Scorpion, Magician, Druin]
-[Late areas: Knight, Demon Knight, Magiwyvern]
-[Rare: Metal Slime!]
-
-A wild [MONSTER_NAME] attacks!
-[MONSTER_NAME]: HP [X]
-
-What will you do?
-• ATTACK - Strike with your weapon
-• CAST [spell] - Use magic
-• DEFEND - Raise your shield
-• RUN - Attempt to flee
-
-[Add COMBAT=[MONSTER_NAME]_HP[X] to SAVE]
-[Reprint SAVE]
-`,
-    scenario: "A fierce monster blocks the hero's path!"
+    personality: `⚔️ Random encounter! Show monster ASCII. Set COMBAT=ENEMY_HP##. Print SAVE. Options: ATTACK/DEFEND/CAST/RUN.`,
+    scenario: "Monster appears!"
   },
 
-  /* ATTACK in Combat */
   {
-    keywords: ["attack", "fight", "strike", "hit"],
+    keywords: ["attack", "fight"],
     andAny: ["combat="],
     priority: 5,
     triggers: ["in_combat"],
-    personality: `The hero attacks!
-
-[Extract current STR + weapon attack from SAVE]
-[Calculate damage: (STR + weapon attack) / 2 + random(0-4) - enemy defense/2]
-[Extract enemy HP from COMBAT= in last SAVE]
-
-The hero strikes for [X] damage!
-[MONSTER_NAME]: HP [NewHP]
-
-[If monster HP <= 0:]
-  The [MONSTER_NAME] is defeated!
-
-  Thou hast earned [EXP] experience points!
-  Thou hast found [GOLD] gold pieces!
-
-  [Add EXP and GOLD to SAVE]
-  [Check if leveled up - if EXP >= threshold]
-  [Remove COMBAT= from SAVE]
-
-[If monster still alive:]
-  The [MONSTER_NAME] attacks!
-  [Calculate monster damage]
-  The hero takes [Y] damage!
-  HP: [NewHP/MaxHP]
-
-  [Update HP in SAVE]
-  [Update monster HP in COMBAT=]
-  [If hero HP <= 0: GAME OVER]
-
-[Reprint SAVE]
-`,
-    scenario: "The battle rages on!"
+    personality: `Attack! Calc dmg: (STR+wpn)/2+rnd(0-4)-DEF/2. If enemy dies: award EXP/GOLD, remove COMBAT, check level. Else: enemy attacks back. Update HP in SAVE. Print SAVE.`,
+    scenario: "Battle!"
   },
-
-  /* DEFEND in Combat */
   {
-    keywords: ["defend", "guard", "block", "shield"],
+    keywords: ["defend", "guard"],
     andAny: ["combat="],
     priority: 5,
     triggers: ["in_combat"],
-    personality: `The hero raises their shield defensively!
-
-The [MONSTER_NAME] attacks!
-[Calculate damage with 50% reduction]
-The attack is partially blocked! The hero takes [Y/2] damage!
-
-HP: [NewHP/MaxHP]
-
-[Update HP in SAVE]
-[Reprint SAVE]
-`,
-    scenario: "The hero takes a defensive stance."
+    personality: `Defend! Enemy attacks with 50% dmg. Update HP in SAVE. Print SAVE.`,
+    scenario: "Defensive."
   },
-
-  /* RUN from Combat */
   {
-    keywords: ["run", "flee", "escape", "retreat"],
+    keywords: ["run", "flee"],
     andAny: ["combat="],
     priority: 5,
     triggers: ["fled_combat"],
-    personality: `The hero attempts to flee!
-
-[50% chance based on AGI]
-[If successful:]
-  The hero escapes safely!
-  [Remove COMBAT= from SAVE]
-
-[If failed:]
-  Blocked by the enemy!
-  The [MONSTER_NAME] attacks!
-  [Calculate damage]
-  The hero takes [Y] damage!
-  HP: [NewHP/MaxHP]
-
-  [Update HP in SAVE]
-
-[Reprint SAVE]
-`,
-    scenario: "The hero tries to escape!"
+    personality: `Flee! 50% chance. Success: remove COMBAT. Fail: take hit. Print SAVE.`,
+    scenario: "Escaping!"
   },
 
   /* CAST SPELL in Combat */
