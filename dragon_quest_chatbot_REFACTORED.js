@@ -68,19 +68,19 @@ function inCombat() { return !!(GAME_STATE.COMBAT); }
 //#region GAME_DB
 
 const MONSTERS = {
-    "SLIME": { hp: 3, attack: 5, defense: 2, gold: 2, exp: 1, zone: 1 },
-    "RED_SLIME": { hp: 4, attack: 7, defense: 3, gold: 3, exp: 2, zone: 1 },
-    "DRAKEE": { hp: 6, attack: 9, defense: 6, gold: 5, exp: 3, zone: 1 },
-    "GHOST": { hp: 7, attack: 11, defense: 8, gold: 8, exp: 4, zone: 2 },
-    "MAGICIAN": { hp: 13, attack: 15, defense: 12, gold: 18, exp: 13, zone: 2, spells: ["HURT"] },
-    "SCORPION": { hp: 20, attack: 18, defense: 16, gold: 26, exp: 16, zone: 3 },
-    "DRUIN": { hp: 22, attack: 20, defense: 18, gold: 30, exp: 18, zone: 3 },
-    "METAL_SLIME": { hp: 4, attack: 10, defense: 255, gold: 6, exp: 115, zone: 4, flees: true },
-    "KNIGHT": { hp: 37, attack: 40, defense: 40, gold: 70, exp: 42, zone: 7 },
-    "MAGIWYVERN": { hp: 49, attack: 56, defense: 50, gold: 105, exp: 58, zone: 7, breathFire: true },
-    "DEMON_KNIGHT": { hp: 47, attack: 60, defense: 54, gold: 110, exp: 78, zone: 7 },
-    "DRAGONLORD_1": { hp: 100, attack: 90, defense: 75, gold: 0, exp: 0, zone: 99, boss: true },
-    "DRAGONLORD_2": { hp: 165, attack: 140, defense: 90, gold: 0, exp: 2000, zone: 99, boss: true, breathFire: true }
+    "SLIME": { hp: 3, attack: 5, defense: 2, gold: 2, exp: 1, zone: 1, wiki: "https://dragonquest.fandom.com/wiki/Slime" },
+    "RED_SLIME": { hp: 4, attack: 7, defense: 3, gold: 3, exp: 2, zone: 1, wiki: "https://dragonquest.fandom.com/wiki/Red_slime" },
+    "DRAKEE": { hp: 6, attack: 9, defense: 6, gold: 5, exp: 3, zone: 1, wiki: "https://dragonquest.fandom.com/wiki/Drakee" },
+    "GHOST": { hp: 7, attack: 11, defense: 8, gold: 8, exp: 4, zone: 2, wiki: "https://dragonquest.fandom.com/wiki/Ghost_(Dragon_Quest)" },
+    "MAGICIAN": { hp: 13, attack: 15, defense: 12, gold: 18, exp: 13, zone: 2, spells: ["HURT"], wiki: "https://dragonquest.fandom.com/wiki/Magician_(Dragon_Quest)" },
+    "SCORPION": { hp: 20, attack: 18, defense: 16, gold: 26, exp: 16, zone: 3, wiki: "https://dragonquest.fandom.com/wiki/Scorpion" },
+    "DRUIN": { hp: 22, attack: 20, defense: 18, gold: 30, exp: 18, zone: 3, wiki: "https://dragonquest.fandom.com/wiki/Druin" },
+    "METAL_SLIME": { hp: 4, attack: 10, defense: 255, gold: 6, exp: 115, zone: 4, flees: true, wiki: "https://dragonquest.fandom.com/wiki/Metal_slime" },
+    "KNIGHT": { hp: 37, attack: 40, defense: 40, gold: 70, exp: 42, zone: 7, wiki: "https://dragonquest.fandom.com/wiki/Knight_(Dragon_Quest)" },
+    "MAGIWYVERN": { hp: 49, attack: 56, defense: 50, gold: 105, exp: 58, zone: 7, breathFire: true, wiki: "https://dragonquest.fandom.com/wiki/Magiwyvern" },
+    "DEMON_KNIGHT": { hp: 47, attack: 60, defense: 54, gold: 110, exp: 78, zone: 7, wiki: "https://dragonquest.fandom.com/wiki/Demon_knight" },
+    "DRAGONLORD_1": { hp: 100, attack: 90, defense: 75, gold: 0, exp: 0, zone: 99, boss: true, wiki: "https://dragonquest.fandom.com/wiki/Dragonlord" },
+    "DRAGONLORD_2": { hp: 165, attack: 140, defense: 90, gold: 0, exp: 2000, zone: 99, boss: true, breathFire: true, wiki: "https://dragonquest.fandom.com/wiki/Dragonlord" }
 };
 
 const LEVEL_THRESHOLDS = {
@@ -121,8 +121,10 @@ Initialize SAVE state: HP=15/15|MP=0/0|LVL=1|GOLD=120|EXP=0|STR=4|AGI=4|LOC=TANT
 
 List available commands: STATS, TALK, GO [dir], SEARCH, TAKE, CAST, EQUIP, USE, ATTACK, DEFEND, RUN, BUY/SELL, DOOR, SAVE.
 
-Format output with clear borders and spacing.`,
-    scenario: "Hero stands in Tantegel Castle throne room at the start of their quest."
+Format output with clear borders and spacing.
+
+Reference: Gather information about Alefgard from https://dragonquest.fandom.com/wiki/Alefgard`,
+    scenario: "Hero stands in Tantegel Castle throne room at the start of their quest. Reference: https://dragonquest.fandom.com/wiki/Tantegel_Castle"
   },
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -152,11 +154,11 @@ Include complete SAVE block at end of output.`,
     personality: `Hero searches area. Based on {LOC} from SAVE state, describe what they find:
 
 Location-specific details:
-- TANTEGEL_THRONE: Ornate decorations, stairs to basement
+- TANTEGEL_THRONE: Ornate decorations, stairs to basement (Ref: https://dragonquest.fandom.com/wiki/Tantegel_Castle)
 - TANTEGEL_COURTYARD: Magical healing spring, castle walls
-- BRECCONARY/GARINHAM/RIMULDAR/CANTLIN: Town streets, shops, NPCs
+- BRECCONARY/GARINHAM/RIMULDAR/CANTLIN: Town streets, shops, NPCs (Ref: https://dragonquest.fandom.com/wiki/Brecconary)
 - CAVE/DUNGEON: Dark passages, monster sounds, potential items
-- OVERWORLD: Wilderness, visible landmarks based on position
+- OVERWORLD: Wilderness, visible landmarks based on position (Ref: https://dragonquest.fandom.com/wiki/Alefgard)
 
 Mention any items to TAKE, NPCs to TALK to, or exits available.
 Include SAVE block at end.`,
@@ -170,15 +172,15 @@ Include SAVE block at end.`,
     personality: `Hero talks to NPCs. Based on {LOC} and {FLAGS} in SAVE:
 
 TANTEGEL_THRONE:
-- King Lorik: If !PRINCESS_SAVED: "Please save the Princess from the cave!" / If PRINCESS_SAVED: "Now defeat the Dragonlord!"
+- King Lorik: If !PRINCESS_SAVED: "Please save the Princess from the cave!" / If PRINCESS_SAVED: "Now defeat the Dragonlord!" (Ref: https://dragonquest.fandom.com/wiki/King_Lorik)
 
 BRECCONARY:
 - Villager: "Welcome! Buy weapons at the north shop."
 - Old Man: "Death is dark beyond the horizon..."
 
 GARINHAM:
-- Guard: "Thou cannot enter Charlock without the Rainbow Drop!"
-- Merchant: "Erdrick saved this land long ago."
+- Guard: "Thou cannot enter Charlock without the Rainbow Drop!" (Ref: https://dragonquest.fandom.com/wiki/Rainbow_Drop)
+- Merchant: "Erdrick saved this land long ago." (Ref: https://dragonquest.fandom.com/wiki/Erdrick)
 
 Include SAVE block at end.`,
     scenario: "Hero engages NPCs in conversation."
@@ -265,6 +267,8 @@ Describe new area. Update SAVE with new LOC.`,
 Display: "⚔️ A MONSTER APPEARS! ⚔️"
 Show monster name and HP.
 List combat options: ATTACK, CAST [spell], DEFEND, RUN
+
+When displaying monster info, reference the wiki link from MONSTERS[monster_name].wiki for additional lore.
 
 Add COMBAT={MONSTER_NAME}_HP{X} to SAVE state.
 Include updated SAVE block.`,
@@ -373,7 +377,9 @@ Check if "HERB" exists in {INV}:
 - If no: "Thou dost not have an herb!"
 
 Display healing message with new HP value.
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Medicinal herbs from https://dragonquest.fandom.com/wiki/Medicinal_herb`,
     scenario: "Hero consumes healing herb."
   },
 
@@ -391,7 +397,9 @@ Check level and MP requirements:
 - If not met: "The spell fizzles!" or "Not enough MP!"
 
 Display healing amount and new HP/MP values.
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Dragon Quest spells from https://dragonquest.fandom.com/wiki/List_of_spells_in_Dragon_Quest`,
     scenario: "Healing magic flows through the hero."
   },
 
@@ -422,7 +430,9 @@ Restore HP to MaxHP and MP to MaxMP (free healing).
 Display: "✨ The healing waters restore your vitality! ✨"
 Show new HP and MP values.
 
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Tantegel Castle from https://dragonquest.fandom.com/wiki/Tantegel_Castle`,
     scenario: "Enchanted spring works its magic."
   },
 
@@ -536,7 +546,9 @@ Display: "💕 Princess Gwaelin joins your party! 💕"
 She whispers: "The Ball of Light lies southwest of Charlock..."
 
 Add "PRINCESS_SAVED" to FLAGS in SAVE.
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Princess Gwaelin from https://dragonquest.fandom.com/wiki/Princess_Gwaelin`,
     scenario: "The princess is rescued!"
   },
 
@@ -558,7 +570,9 @@ Add "GWAELINS_LOVE_RECEIVED" to FLAGS.
 
 King: "Now defeat the Dragonlord and restore the Ball of Light!"
 
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Gwaelin's Love from https://dragonquest.fandom.com/wiki/Gwaelin%27s_Love`,
     scenario: "King thanks hero for princess's safe return."
   },
 
@@ -575,7 +589,9 @@ Display: "⭐ Found Erdrick's Token! ⭐"
 Ancient medallion proves hero's lineage.
 
 Add "ERDRICK'S_TOKEN" to FLAGS.
-Include updated SAVE block.`,
+Include updated SAVE block.
+
+Reference: Gather information about Erdrick and his legacy from https://dragonquest.fandom.com/wiki/Erdrick`,
     scenario: "Legendary artifact discovered in swamp!"
   },
 
@@ -602,8 +618,10 @@ Dragonlord: "Then thou art a fool! DIE!"
 
 Display: "💀 THE DRAGONLORD ATTACKS! 💀"
 Set COMBAT=DRAGONLORD_1_HP100
-Include updated SAVE block.`,
-    scenario: "Ultimate confrontation begins!"
+Include updated SAVE block.
+
+Reference: Gather information about the Dragonlord from https://dragonquest.fandom.com/wiki/Dragonlord`,
+    scenario: "Ultimate confrontation begins! Reference: https://dragonquest.fandom.com/wiki/Charlock_Castle"
   },
 
   {
