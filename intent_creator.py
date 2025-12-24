@@ -268,56 +268,69 @@ for target in TARGETS:
     y_binary = (y == target).astype(int)
     clf = LogisticRegression(solver='liblinear', penalty='l2', C=1.0, class_weight='balanced')
     clf.fit(X, y_binary)
-    
-    # Quantize Weights to 4-bit (0-15) for Atomic Fragmentation
+
+    # Quantize Weights to 8-bit signed integers (-128 to 127) for better precision
     w = clf.coef_[0]
-    # Simple quantization: Map -max..+max to 0..15
-    w_min, w_max = np.min(w), np.max(w)
-    w_range = w_max - w_min if (w_max - w_min) > 0 else 1.0
-    
-    # Normalize to 0.0 - 1.0
-    w_norm = (w - w_min) / w_range
-    # Map to 0-15 integer
-    w_int = np.round(w_norm * 15).astype(int)
-    
-    # Pack into string string
-    # Alphabet for 0-15: A-P
-    alphabet = "ABCDEFGHIJKLMNOP"
-    w_str = "".join([alphabet[val] for val in w_int])
-    
+
+    # Find the scale to fit weights into -128 to 127 range
+    w_max_abs = np.max(np.abs(w))
+    scale = w_max_abs / 127.0 if w_max_abs > 0 else 1.0
+
+    # Quantize to signed 8-bit integers
+    w_quantized = np.round(w / scale).astype(int)
+    # Clamp to valid range
+    w_quantized = np.clip(w_quantized, -128, 127)
+
     # Store Metadata
     models_out[target] = {
         "bias": clf.intercept_[0],
-        "min": w_min,
-        "range": w_range,
-        "weights": w_str
+        "scale": scale,
+        "weights": w_quantized
     }
 
 # ==========================================
-# 6. EXPORT (ATOMIC FRAGMENTATION)
+# 6. EXPORT (Matching INTENT+v15 Format)
 # ==========================================
 print("Exporting to JS...")
-js_out = "// EIDOS INTENT ENGINE (DailyDialogue + PersonaChat)\n"
-js_out += f"var EIDOS_HASH = {HASH_SIZE};\n\n"
 
-# Export function wrapper
-js_out += "function getEidosData() {\n  return {\n"
+# Map Python target names to JS model variable names
+TARGET_TO_MODEL_NAME = {
+    "question": "MODEL_QUESTION",
+    "disclosure": "MODEL_DISCLOSURE",
+    "directive": "MODEL_COMMAND",
+    "commissive": "MODEL_PROMISE",
+    "conflict": "MODEL_CONFLICT",
+    "phatic": "MODEL_SMALLTALK",
+    "meta": "MODEL_META",
+    "narrative": "MODEL_NARRATIVE"
+}
+
+js_out = "// EIDOS INTENT ENGINE (DailyDialogue + PersonaChat)\n"
+js_out += "// Paste these model strings into INTENT+v15 (No Weights).js\n"
+js_out += "// in the EIDOS_MODELS section\n\n"
+js_out += f"var HASH_SIZE = {HASH_SIZE};\n"
 
 for target, data in models_out.items():
-    # Split the massive weight string into 1000-char chunks
-    full_str = data['weights']
-    chunks = [full_str[i:i+1000] for i in range(0, len(full_str), 1000)]
-    
-    js_out += f"    '{target}': {{\n"
-    js_out += f"      b: {data['bias']:.4f}, min: {data['min']:.4f}, r: {data['range']:.4f},\n"
-    js_out += "      w: [\n"
-    for chunk in chunks:
-        js_out += f"        '{chunk}',\n"
-    js_out += "      ]\n    },\n"
+    model_name = TARGET_TO_MODEL_NAME.get(target, f"MODEL_{target.upper()}")
 
-js_out += "  };\n}\n"
+    # Format: "b:BIAS;s:SCALE;w:W1,W2,W3,..."
+    bias = data['bias']
+    scale = data['scale']
+    weights_str = ",".join(str(w) for w in data['weights'])
+
+    model_string = f"b:{bias};s:{scale};w:{weights_str}"
+
+    js_out += f'var {model_name} = "{model_string}"\n'
+
+js_out += "\n// Copy the above variables into your INTENT+v15 (No Weights).js file\n"
+js_out += "// Replace the empty string placeholders in the //#region EIDOS_MODELS section\n"
 
 with open("EIDOS_Sister_Script.js", "w") as f:
     f.write(js_out)
 
 print("DONE. File saved as 'EIDOS_Sister_Script.js'.")
+print("\nTo use these models:")
+print("1. Open EIDOS_Sister_Script.js")
+print("2. Copy all the MODEL_* variable definitions")
+print("3. Paste them into INTENT+v15 (No Weights).js in the EIDOS_MODELS section")
+print("   (Replace the empty string placeholders)")
